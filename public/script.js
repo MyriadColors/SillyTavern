@@ -754,14 +754,16 @@ async function firstLoadInit() {
     initDynamicStyles();
     initTags();
     initBookmarks();
-    await getUserAvatars(true, user_avatar);
-    await getCharacters();
-    await getBackgrounds();
-    await initTokenizers();
+    await Promise.all([
+        getUserAvatars(true, user_avatar),
+        getCharacters(),
+        getBackgrounds(),
+        initTokenizers(),
+        initPersonas(),
+        initSlashCommandAutoComplete(),
+    ]);
     initBackgrounds();
     initAuthorsNote();
-    await initPersonas();
-    await initSlashCommandAutoComplete();
     initMacroAutoComplete();
     initWorldInfo();
     initHorde();
@@ -1040,20 +1042,24 @@ export async function printCharacters(fullRefresh = false) {
                 $(listId).append(emptyBlock);
             }
             let displayCount = 0;
+            const elementsToAppend = [];
             for (const i of data) {
                 switch (i.type) {
                     case 'character':
-                        $(listId).append(getCharacterBlock(i.item, i.id));
+                        elementsToAppend.push(getCharacterBlock(i.item, i.id));
                         displayCount++;
                         break;
                     case 'group':
-                        $(listId).append(getGroupBlock(i.item));
+                        elementsToAppend.push(getGroupBlock(i.item));
                         displayCount++;
                         break;
                     case 'tag':
-                        $(listId).append(getTagBlock(i.item, i.entities, i.hidden, i.isUseless));
+                        elementsToAppend.push(getTagBlock(i.item, i.entities, i.hidden, i.isUseless));
                         break;
                 }
+            }
+            if (elementsToAppend.length > 0) {
+                $(listId).append(elementsToAppend);
             }
 
             const hidden = (characters.length + groups.length) - displayCount;
@@ -10461,6 +10467,7 @@ export async function processDroppedFiles(files, data = new Map()) {
     }
 
     if (avatarFileNames.length > 0) {
+        await printCharacters(true);
         await importCharactersTags(avatarFileNames);
         selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
     }
@@ -10471,7 +10478,6 @@ export async function processDroppedFiles(files, data = new Map()) {
  * @param {string[]} avatarFileNames character avatar filenames whose tags are to import
  */
 async function importCharactersTags(avatarFileNames) {
-    await getCharacters();
     for (let i = 0; i < avatarFileNames.length; i++) {
         if (power_user.tag_import_setting !== tag_import_setting.NONE) {
             const importedCharacter = characters.find(character => character.avatar === avatarFileNames[i]);
@@ -10545,6 +10551,26 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
             // Refresh existing thumbnail
             if (exists && this_chid !== undefined) {
                 await fetch(getThumbnailUrl('avatar', avatarFileName), { cache: 'reload' });
+            }
+
+            const charResponse = await fetch('/api/characters/get', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ avatar_url: avatarFileName }),
+                cache: 'no-cache',
+            });
+            if (charResponse.ok) {
+                const newCharData = await charResponse.json();
+                newCharData.name = DOMPurify.sanitize(newCharData.name);
+                if (!newCharData.chat) newCharData.chat = `${newCharData.name} - ${humanizedDateTime()}`;
+                newCharData.chat = String(newCharData.chat);
+                
+                if (exists) {
+                    const index = characters.findIndex(c => c.avatar === avatarFileName);
+                    if (index !== -1) characters[index] = newCharData;
+                } else {
+                    characters.push(newCharData);
+                }
             }
 
             $('#character_search_bar').val('').trigger('input');
@@ -11992,6 +12018,7 @@ jQuery(async function () {
         }
 
         if (avatarFileNames.length > 0) {
+            await printCharacters(true);
             await importCharactersTags(avatarFileNames);
             selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
         }

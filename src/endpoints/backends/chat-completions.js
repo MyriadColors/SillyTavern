@@ -728,7 +728,25 @@ async function sendMakerSuiteRequest(request, response) {
                 let message = `${apiName} API returned no candidate`;
                 console.warn(message, generateResponseJson);
                 if (generateResponseJson?.promptFeedback?.blockReason) {
-                    message += `\nPrompt was blocked due to : ${generateResponseJson.promptFeedback.blockReason}`;
+                    message = `${apiName} prompt was blocked (Reason: ${generateResponseJson.promptFeedback.blockReason})`;
+                    if (Array.isArray(generateResponseJson.promptFeedback.safetyRatings)) {
+                        const triggered = generateResponseJson.promptFeedback.safetyRatings
+                            .filter(r => r.blocked || ['HIGH', 'MEDIUM'].includes(r.probability))
+                            .map(r => `${r.category}: ${r.probability}`);
+                        if (triggered.length) message += ` [${triggered.join(', ')}]`;
+                    }
+                }
+                return response.send({ error: { message } });
+            }
+
+            const candidate = candidates[0];
+            if (candidate.finishReason && ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII'].includes(candidate.finishReason)) {
+                let message = `${apiName} generation was blocked (Finish reason: ${candidate.finishReason})`;
+                if (Array.isArray(candidate.safetyRatings)) {
+                    const triggered = candidate.safetyRatings
+                        .filter(r => r.blocked || ['HIGH', 'MEDIUM'].includes(r.probability))
+                        .map(r => `${r.category}: ${r.probability}`);
+                    if (triggered.length) message += ` [${triggered.join(', ')}]`;
                 }
                 return response.send({ error: { message } });
             }
@@ -1854,6 +1872,57 @@ router.post('/status', async function (request, statusResponse) {
             } catch (error) {
                 console.error('Error fetching Google AI Studio models:', error);
                 return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
+            }
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.VERTEXAI) {
+            const region = request.body.vertexai_region || 'us-central1';
+            const projectId = request.body.vertexai_express_project_id;
+            try {
+                const { authHeader, authType } = await getVertexAIAuth(request);
+                let modelsUrl;
+                const headers = {};
+
+                if (authType === 'express') {
+                    const keyParam = authHeader.replace('Bearer ', '');
+                    const baseUrl = region === 'global'
+                        ? 'https://aiplatform.googleapis.com'
+                        : `https://${region}-aiplatform.googleapis.com`;
+                    modelsUrl = projectId
+                        ? `${baseUrl}/v1/projects/${projectId}/locations/${region}/publishers/google/models?key=${keyParam}`
+                        : `${baseUrl}/v1/publishers/google/models?key=${keyParam}`;
+                } else if (authType === 'full') {
+                    const serviceAccountJson = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT, request.body.secret_id);
+                    const serviceAccount = JSON.parse(serviceAccountJson);
+                    const saProjectId = getProjectIdFromServiceAccount(serviceAccount);
+                    const baseUrl = region === 'global'
+                        ? 'https://aiplatform.googleapis.com'
+                        : `https://${region}-aiplatform.googleapis.com`;
+                    modelsUrl = `${baseUrl}/v1/projects/${saProjectId}/locations/${region}/publishers/google/models`;
+                    headers['Authorization'] = authHeader;
+                } else {
+                    const apiUrl = trimTrailingSlash(request.body.reverse_proxy || API_VERTEX_AI);
+                    modelsUrl = `${apiUrl}/v1/publishers/google/models`;
+                    headers['Authorization'] = authHeader;
+                }
+
+                const response = await fetch(modelsUrl, { headers });
+                if (response.ok) {
+                    /** @type {any} */
+                    const data = await response.json();
+                    const models = (data.publisherModels || data.models || [])
+                        .map(m => {
+                            const name = m.name || m.id || '';
+                            const id = name.includes('/') ? name.split('/').pop() : name;
+                            return { id, name: id, ...m };
+                        })
+                        .filter(m => m.id && (m.id.startsWith('gemini') || m.id.startsWith('gemma') || m.id.startsWith('imagen')));
+                    return statusResponse.send({ data: models });
+                } else {
+                    console.warn('Vertex AI models endpoint returned status:', response.status, response.statusText);
+                    return statusResponse.send({ data: [] });
+                }
+            } catch (error) {
+                console.error('Error in Vertex AI models endpoint:', error);
+                return statusResponse.status(400).send({ error: true, message: error.message });
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.AZURE_OPENAI) {
             const { azure_base_url, azure_deployment_name, azure_api_version } = request.body;

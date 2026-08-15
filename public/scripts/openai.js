@@ -1631,34 +1631,42 @@ export async function prepareOpenAIMessages({
  */
 export function tryParseStreamingError(response, decoded, { quiet = false } = {}) {
     try {
-        const data = JSON.parse(decoded);
+        let data = JSON.parse(decoded);
 
         if (!data) {
             return;
         }
 
+        if (Array.isArray(data) && data.length > 0) {
+            data = data[0];
+        }
+
         checkQuotaError(data, { quiet });
         checkModerationError(data, { quiet });
 
-        // these do not throw correctly (equiv to Error("[object Object]"))
-        // if trying to fix "[object Object]" displayed to users, start here
+        const errorObj = data.error || data.detail?.error || (typeof data.detail === 'object' ? data.detail : null);
+        const errorMessage = (typeof errorObj === 'string' ? errorObj : errorObj?.message)
+            || (typeof data.message === 'string' ? data.message : null)
+            || (typeof data.detail === 'string' ? data.detail : null)
+            || (data.error ? String(data.error) : null)
+            || response.statusText;
 
-        if (data.error) {
-            !quiet && toastr.error(data.error.message || response.statusText, 'Chat Completion API');
-            throw new Error(data);
+        if (errorObj || data.message || data.detail) {
+            if (!quiet && errorMessage) {
+                if (errorObj?.code === 429 || errorObj?.status === 'RESOURCE_EXHAUSTED' || /quota|resource has been exhausted|rate limit/i.test(errorMessage)) {
+                    toastr.error(errorMessage, t`Rate Limit / Quota Exceeded`, { timeOut: 10000 });
+                } else if (errorObj?.code === 403 || errorObj?.status === 'PERMISSION_DENIED' || /permission denied/i.test(errorMessage)) {
+                    toastr.error(errorMessage, t`Permission Denied (Check Service Account Roles)`, { timeOut: 10000 });
+                } else {
+                    toastr.error(errorMessage, t`Chat Completion API Error`);
+                }
+            }
+            throw new Error(errorMessage);
         }
-
-        if (data.message) {
-            !quiet && toastr.error(data.message, 'Chat Completion API');
-            throw new Error(data);
+    } catch (e) {
+        if (e instanceof Error && e.message && !e.message.startsWith('Got response status')) {
+            throw e;
         }
-
-        if (data.detail) {
-            !quiet && toastr.error(data.detail?.error?.message || response.statusText, 'Chat Completion API');
-            throw new Error(data);
-        }
-    } catch {
-        // No JSON. Do nothing.
     }
 }
 
@@ -2249,6 +2257,43 @@ function saveModelList(data) {
         }
 
         $('#model_google_select').val(oai_settings.google_model).trigger('change');
+    }
+
+    if (oai_settings.chat_completion_source === chat_completion_sources.VERTEXAI) {
+        // Clear only the "Other" optgroup for dynamic models
+        $('#vertexai_other_models').empty();
+
+        // Get static model options that are already in the HTML
+        const staticModels = [];
+        $('#model_vertexai_select option').each(function () {
+            staticModels.push($(this).val());
+        });
+
+        // Add dynamic models to the "Other" group
+        model_list.forEach((model) => {
+            // Only add if not already in static list
+            if (!staticModels.includes(model.id)) {
+                $('#vertexai_other_models').append(
+                    $('<option>', {
+                        value: model.id,
+                        text: model.id,
+                    }));
+            }
+        });
+
+        // Merge static models into model_list
+        staticModels.forEach(modelId => {
+            if (!model_list.some(model => model.id === modelId)) {
+                model_list.push({ id: modelId });
+            }
+        });
+
+        const selectedModel = model_list.find(model => model.id === oai_settings.vertexai_model);
+        if (model_list.length > 0 && (!selectedModel || !oai_settings.vertexai_model)) {
+            oai_settings.vertexai_model = model_list[0].id;
+        }
+
+        $('#model_vertexai_select').val(oai_settings.vertexai_model).trigger('change');
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.GROQ) {
@@ -3183,6 +3228,13 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
                 state.signature = part.thoughtSignature;
             }
         });
+        const candidate = data?.candidates?.[0];
+        if (candidate?.finishReason && ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT'].includes(candidate.finishReason)) {
+            toastr.warning(t`Generation was interrupted by Google filter (${candidate.finishReason}).`, t`Content Filter`, { timeOut: 8000 });
+        }
+        if (data?.promptFeedback?.blockReason) {
+            toastr.warning(t`Prompt was blocked by Google filter (${data.promptFeedback.blockReason}).`, t`Content Filter`, { timeOut: 8000 });
+        }
         return data?.candidates?.[0]?.content?.parts?.filter(x => !x.thought)?.map(x => x.text)?.[0] || '';
     } else if (chat_completion_source === chat_completion_sources.COHERE) {
         return data?.delta?.message?.content?.text || data?.delta?.message?.tool_plan || '';

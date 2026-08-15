@@ -317,9 +317,11 @@ export async function getUserAvatars(doRender = true, openPageAt = '') {
             showNavigator: true,
             callback: function (data) {
                 $(listId).empty();
+                const elementsToAppend = [];
                 for (const item of data) {
-                    $(listId).append(getUserAvatarBlock(item));
+                    elementsToAppend.push(getUserAvatarBlock(item));
                 }
+                if (elementsToAppend.length > 0) $(listId).append(elementsToAppend);
                 updatePersonaUIStates();
                 localizePagination($('#persona_pagination_container'));
             },
