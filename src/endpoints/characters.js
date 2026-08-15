@@ -1596,6 +1596,161 @@ router.post('/import', async function (request, response) {
     }
 });
 
+/**
+ * Parses card data and optional avatar preview from an uploaded file.
+ * @param {string} uploadPath Path to the uploaded file
+ * @param {string} format File format ('png', 'json', 'yaml', 'yml', 'charx', 'byaf')
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @returns {Promise<{ card: object, avatarPreview?: string }>}
+ */
+async function parseCardData(uploadPath, format, directories) {
+    let card = null;
+    let avatarPreview = undefined;
+
+    switch (format.toLowerCase()) {
+        case 'png': {
+            const imgData = await readCharacterData(uploadPath);
+            if (!imgData) throw new Error('Failed to read character data from PNG');
+            const rawJson = JSON.parse(imgData);
+            card = getCharaCardV2(rawJson, directories, false);
+            const imgBuffer = fs.readFileSync(uploadPath);
+            avatarPreview = `data:image/png;base64,${imgBuffer.toString('base64')}`;
+            break;
+        }
+        case 'json': {
+            const data = fs.readFileSync(uploadPath, 'utf8');
+            const rawJson = JSON.parse(data);
+            card = getCharaCardV2(rawJson, directories, false);
+            break;
+        }
+        case 'yaml':
+        case 'yml': {
+            const fileText = fs.readFileSync(uploadPath, 'utf8');
+            const yamlData = yaml.parse(fileText);
+            card = getCharaCardV2({
+                name: yamlData.name ?? '',
+                description: yamlData.context ?? '',
+                first_mes: yamlData.greeting ?? '',
+            }, directories, false);
+            break;
+        }
+        case 'charx': {
+            const fileBuffer = fs.readFileSync(uploadPath);
+            const data = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength);
+            const parser = new CharXParser(data);
+            const { card: parsedCard, avatar } = await parser.parse();
+            card = getCharaCardV2(parsedCard, directories, false);
+            if (avatar) {
+                avatarPreview = `data:image/png;base64,${Buffer.from(avatar).toString('base64')}`;
+            }
+            break;
+        }
+        case 'byaf': {
+            const fileBuffer = fs.readFileSync(uploadPath);
+            const byafData = await new ByafParser(fileBuffer).parse();
+            const byafCard = byafData.character.card;
+            card = getCharaCardV2(byafCard, directories, false);
+            if (byafData.images?.[0]?.image && Buffer.isBuffer(byafData.images[0].image)) {
+                avatarPreview = `data:image/png;base64,${byafData.images[0].image.toString('base64')}`;
+            }
+            break;
+        }
+        default:
+            throw new Error(`Unsupported format: ${format}`);
+    }
+
+    if (!card) {
+        throw new Error('Could not parse character card');
+    }
+
+    return { card, avatarPreview };
+}
+
+router.post('/parse-card', async function (request, response) {
+    if (!request.file) {
+        return response.status(400).send({ message: 'No file uploaded' });
+    }
+    const uploadPath = path.join(request.file.destination, request.file.filename);
+    const format = request.body.file_type || path.extname(request.file.originalname).replace('.', '').toLowerCase();
+
+    try {
+        const result = await parseCardData(uploadPath, format, request.user.directories);
+        if (fs.existsSync(uploadPath)) {
+            fs.unlinkSync(uploadPath);
+        }
+        return response.send(result);
+    } catch (err) {
+        if (fs.existsSync(uploadPath)) {
+            fs.unlinkSync(uploadPath);
+        }
+        console.error('Failed to parse card:', err);
+        return response.status(400).send({ message: err.message || 'Failed to parse card' });
+    }
+});
+
+router.post('/update-card', validateAvatarUrlMiddleware, async function (request, response) {
+    try {
+        if (!request.body || !request.body.avatar_url || !request.body.card_data) {
+            return response.status(400).send({ message: 'Missing avatar_url or card_data in request body' });
+        }
+
+        const avatarUrl = sanitize(request.body.avatar_url);
+        const avatarPath = path.join(request.user.directories.characters, avatarUrl);
+        if (!fs.existsSync(avatarPath)) {
+            return response.status(404).send({ message: 'Character file not found' });
+        }
+
+        const rawOldData = await readCharacterData(avatarPath);
+        if (!rawOldData) {
+            return response.status(500).send({ message: 'Failed to read existing character data' });
+        }
+
+        const oldCard = getCharaCardV2(JSON.parse(rawOldData), request.user.directories);
+
+        let newCard = typeof request.body.card_data === 'string'
+            ? JSON.parse(request.body.card_data)
+            : request.body.card_data;
+
+        newCard = getCharaCardV2(newCard, request.user.directories, false);
+
+        // Preserve critical metadata from existing card
+        if (oldCard.create_date) {
+            newCard.create_date = oldCard.create_date;
+            if (newCard.data) newCard.data.create_date = oldCard.create_date;
+        }
+        if (oldCard.chat) {
+            newCard.chat = oldCard.chat;
+        }
+
+        // Validate merged card
+        const validator = new TavernCardValidator(newCard);
+        if (!validator.validate()) {
+            return response.status(400).send({ message: validator.lastValidationError ?? 'Validation failed' });
+        }
+
+        const targetFile = avatarUrl.replace('.png', '');
+        const serializedCard = JSON.stringify(newCard);
+
+        if (request.file) {
+            const crop = tryParse(request.query.crop);
+            const uploadPath = path.join(request.file.destination, request.file.filename);
+            await writeCharacterData(uploadPath, serializedCard, targetFile, request, crop);
+            if (fs.existsSync(uploadPath)) {
+                fs.unlinkSync(uploadPath);
+            }
+            invalidateThumbnail(request.user.directories, 'avatar', avatarUrl);
+            cacheBuster.bust(request, response);
+        } else {
+            await writeCharacterData(avatarPath, serializedCard, targetFile, request);
+        }
+
+        return response.send({ ok: true, avatar: avatarUrl });
+    } catch (err) {
+        console.error('Failed to update character card:', err);
+        return response.status(500).send({ message: err.message || 'An error occurred while updating character card' });
+    }
+});
+
 router.post('/duplicate', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         if (!request.body.avatar_url) {

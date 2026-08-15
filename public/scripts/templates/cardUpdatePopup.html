@@ -1,0 +1,160 @@
+<div class="card-update-popup wide100p justifyLeft">
+    <h3 data-i18n="Update Character Card">Update Character Card</h3>
+    <div class="card-update-subtitle opacity75 marginBottom10" data-i18n="card_update_subtitle">
+        Select which elements to update. All chats, chat histories, bookmarks, and custom configurations will be preserved.
+    </div>
+
+    <!-- Comparison Header Banner -->
+    <div class="card-update-comparison-grid">
+        <div class="card-update-col card-update-current">
+            <div class="card-update-col-header fontBold" data-i18n="Current Version">Current Version</div>
+            <div class="card-update-col-body flex-container alignItemsCenter gap10 padding10">
+                <img class="card-update-avatar current-avatar rounded" src="{{currentAvatarUrl}}" alt="Current Avatar" />
+                <div class="card-update-meta">
+                    <div class="fontBold current-name">{{currentName}}</div>
+                    <div class="small opacity75">v{{currentVersion}} &bull; {{currentCreator}}</div>
+                    <div class="small opacity60 marginTop5">
+                        <span title="Alternate Greetings"><i class="fa-solid fa-comments"></i> {{currentGreetingsCount}}</span> &bull;
+                        <span title="Lorebook Entries"><i class="fa-solid fa-book"></i> {{currentLoreEntriesCount}}</span> &bull;
+                        <span title="Regex Scripts"><i class="fa-solid fa-code"></i> {{currentRegexCount}}</span> &bull;
+                        <span title="Tags"><i class="fa-solid fa-tags"></i> {{currentTagsCount}}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card-update-col card-update-incoming">
+            <div class="card-update-col-header fontBold" data-i18n="New / Incoming Version">New / Incoming Version</div>
+            <div class="card-update-col-body flex-container alignItemsCenter gap10 padding10">
+                <img class="card-update-avatar incoming-avatar rounded" src="{{newAvatarUrl}}" alt="New Avatar" />
+                <div class="card-update-meta">
+                    <div class="fontBold incoming-name">{{newName}}</div>
+                    <div class="small opacity75">v{{newVersion}} &bull; {{newCreator}}</div>
+                    <div class="small opacity60 marginTop5">
+                        <span title="Alternate Greetings"><i class="fa-solid fa-comments"></i> {{newGreetingsCount}}</span> &bull;
+                        <span title="Lorebook Entries"><i class="fa-solid fa-book"></i> {{newLoreEntriesCount}}</span> &bull;
+                        <span title="Regex Scripts"><i class="fa-solid fa-code"></i> {{newRegexCount}}</span> &bull;
+                        <span title="Tags"><i class="fa-solid fa-tags"></i> {{newTagsCount}}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Options Form -->
+    <div class="card-update-options marginTop15">
+        <h4 class="marginBottom5" data-i18n="Update Options">Update Options</h4>
+
+        <!-- Avatar Image -->
+        <div class="card-update-option-row">
+            <label class="checkbox_label flex-container alignItemsCenter gap10">
+                <input type="checkbox" id="card_update_opt_avatar" {{#if hasNewAvatar}}checked{{/if}} {{#unless hasNewAvatar}}disabled{{/unless}} />
+                <span>
+                    <strong data-i18n="Update Avatar Image">Update Avatar Image</strong>
+                    <small class="displayBlock opacity75" data-i18n="Replace the character portrait with the image from the incoming card.">Replace the character portrait with the image from the incoming card.</small>
+                </span>
+            </label>
+        </div>
+
+        <!-- Core Definitions -->
+        <div class="card-update-option-row marginTop10">
+            <label class="checkbox_label flex-container alignItemsCenter gap10">
+                <input type="checkbox" id="card_update_opt_definitions" checked />
+                <span>
+                    <strong data-i18n="Update Core Definitions">Update Core Definitions</strong>
+                    <small class="displayBlock opacity75" data-i18n="Update Character Name, Description, Personality, Scenario, and Creator Notes.">Update Character Name, Description, Personality, Scenario, and Creator Notes.</small>
+                </span>
+            </label>
+        </div>
+
+        <!-- First Message -->
+        <div class="card-update-option-row marginTop10">
+            <label class="checkbox_label flex-container alignItemsCenter gap10">
+                <input type="checkbox" id="card_update_opt_first_mes" checked />
+                <span>
+                    <strong data-i18n="Update First Message">Update First Message (Greeting)</strong>
+                    <small class="displayBlock opacity75" data-i18n="Updates default first message. Existing ongoing chats will keep their message history.">Updates default first message. Existing ongoing chats will keep their message history.</small>
+                </span>
+            </label>
+        </div>
+
+        <!-- Alternate Greetings -->
+        <div class="card-update-option-row marginTop10 flex-container flexFlowColumn gap5">
+            <label for="card_update_opt_alt_greetings">
+                <strong data-i18n="Alternate Greetings:">Alternate Greetings:</strong>
+            </label>
+            <select id="card_update_opt_alt_greetings" class="text_pole">
+                <option value="merge" selected data-i18n="Merge (Append new greetings, keep existing)">Merge (Append new greetings, keep existing)</option>
+                <option value="replace" data-i18n="Replace All (Use incoming greetings only)">Replace All (Use incoming greetings only)</option>
+                <option value="keep" data-i18n="Keep Current (Do not change greetings)">Keep Current (Do not change greetings)</option>
+            </select>
+        </div>
+
+        <!-- Example Dialogue -->
+        <div class="card-update-option-row marginTop10">
+            <label class="checkbox_label flex-container alignItemsCenter gap10">
+                <input type="checkbox" id="card_update_opt_mes_example" checked />
+                <span>
+                    <strong data-i18n="Update Example Dialogue">Update Example Dialogue (mes_example)</strong>
+                </span>
+            </label>
+        </div>
+
+        <!-- System Prompt & Instructions -->
+        <div class="card-update-option-row marginTop10">
+            <label class="checkbox_label flex-container alignItemsCenter gap10">
+                <input type="checkbox" id="card_update_opt_system_prompt" checked />
+                <span>
+                    <strong data-i18n="Update System Prompt & Post-History Instructions">Update System Prompt & Post-History Instructions</strong>
+                </span>
+            </label>
+        </div>
+
+        <!-- Embedded Lorebook -->
+        <div class="card-update-option-row marginTop10 flex-container flexFlowColumn gap5">
+            <label for="card_update_opt_character_book">
+                <strong data-i18n="Embedded Character Book (Lorebook):">Embedded Character Book (Lorebook):</strong>
+            </label>
+            <select id="card_update_opt_character_book" class="text_pole">
+                <option value="merge" selected data-i18n="Merge Entries (Add/update incoming entries, keep user entries)">Merge Entries (Add/update incoming entries, keep user entries)</option>
+                <option value="replace" data-i18n="Replace (Overwrite entire embedded character book)">Replace (Overwrite entire embedded character book)</option>
+                <option value="keep" data-i18n="Keep Current (Do not modify embedded character book)">Keep Current (Do not modify embedded character book)</option>
+            </select>
+        </div>
+
+        <!-- Regex Scripts -->
+        <div class="card-update-option-row marginTop10 flex-container flexFlowColumn gap5">
+            <label for="card_update_opt_regex">
+                <strong data-i18n="Character Regex Scripts:">Character Regex Scripts:</strong>
+            </label>
+            <select id="card_update_opt_regex" class="text_pole">
+                <option value="merge" selected data-i18n="Merge (Add incoming scripts, keep custom user scripts)">Merge (Add incoming scripts, keep custom user scripts)</option>
+                <option value="replace" data-i18n="Replace All (Overwrite regex scripts with card's scripts)">Replace All (Overwrite regex scripts with card's scripts)</option>
+                <option value="keep" data-i18n="Keep Current (Preserve current regex scripts)">Keep Current (Preserve current regex scripts)</option>
+            </select>
+        </div>
+
+        <!-- Tags -->
+        <div class="card-update-option-row marginTop10 flex-container flexFlowColumn gap5">
+            <label for="card_update_opt_tags">
+                <strong data-i18n="Character Tags:">Character Tags:</strong>
+            </label>
+            <select id="card_update_opt_tags" class="text_pole">
+                <option value="merge" selected data-i18n="Merge (Add new tags from card, keep custom user tags)">Merge (Add new tags from card, keep custom user tags)</option>
+                <option value="replace" data-i18n="Replace (Set tags to incoming card's tags)">Replace (Set tags to incoming card's tags)</option>
+                <option value="keep" data-i18n="Keep Current (Do not change tags)">Keep Current (Do not change tags)</option>
+            </select>
+        </div>
+
+        <!-- Settings Preservation -->
+        <div class="card-update-option-row marginTop15 padding10 highlight-block rounded">
+            <label class="checkbox_label flex-container alignItemsCenter gap10">
+                <input type="checkbox" id="card_update_opt_preserve_settings" checked />
+                <span>
+                    <strong data-i18n="Preserve User Configurations">Preserve User Configurations</strong>
+                    <small class="displayBlock opacity75" data-i18n="Preserve favorite status, character talkativeness, linked World Info lorebooks, depth prompt, persona links, and creation date.">Preserve favorite status, character talkativeness, linked World Info lorebooks, depth prompt, persona links, and creation date.</small>
+                </span>
+            </label>
+        </div>
+    </div>
+</div>

@@ -18,7 +18,7 @@ export default function getBundlerServeMiddleware() {
     devMiddleware.runCompiler = async () => {
         console.log();
         console.log('Compiling frontend libraries with Esbuild...');
-        
+
         const startTime = Date.now();
         await esbuild.build({
             entryPoints: [path.join(serverDirectory, 'public/lib.js')],
@@ -27,7 +27,7 @@ export default function getBundlerServeMiddleware() {
             format: 'esm',
             outfile: path.join(serverDirectory, 'public/dist/lib.js'),
         });
-        
+
         console.log(`Esbuild compiled successfully in ${Date.now() - startTime} ms`);
         console.log();
     };

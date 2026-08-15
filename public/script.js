@@ -288,11 +288,13 @@ import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
+import { CardUpdateManager } from './scripts/card-update.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
     libs,
     getContext,
+    CardUpdateManager,
 };
 
 export {
@@ -10504,9 +10506,10 @@ function selectImportedChar(charId) {
  * @param {object} [options] - Options
  * @param {string} [options.preserveFileName] Whether to preserve original file name
  * @param {Boolean} [options.importTags=false] Whether to import tags
- * @returns {Promise<string>}
+ * @param {Boolean} [options.forceDuplicate=false] Whether to force duplicate creation without prompt
+ * @returns {Promise<string|undefined>}
  */
-async function importCharacter(file, { preserveFileName = '', importTags = false } = {}) {
+async function importCharacter(file, { preserveFileName = '', importTags = false, forceDuplicate = false } = {}) {
     if (is_group_generating || is_send_press) {
         toastr.error(t`Cannot import characters while generating. Stop the request and try again.`, t`Import aborted`);
         throw new Error('Cannot import character while generating');
@@ -10515,6 +10518,31 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
     const ext = file.name.match(/\.(\w+)$/);
     if (!ext || !(['json', 'png', 'yaml', 'yml', 'charx', 'byaf'].includes(ext[1].toLowerCase()))) {
         return;
+    }
+
+    if (!preserveFileName && !forceDuplicate) {
+        try {
+            const parsed = await CardUpdateManager.parseCardFile(file);
+            if (parsed && parsed.card) {
+                const matchIndex = CardUpdateManager.findMatchingCharacterIndex(parsed.card, file.name);
+                if (matchIndex !== -1) {
+                    const decision = await CardUpdateManager.showCardConflictDialog({
+                        existingChar: characters[matchIndex],
+                        file,
+                        newCard: parsed.card,
+                        avatarPreview: parsed.avatarPreview,
+                    });
+
+                    if (decision === 'update') {
+                        return characters[matchIndex].avatar;
+                    } else if (decision === 'cancel') {
+                        return undefined;
+                    }
+                }
+            }
+        } catch (parseErr) {
+            console.debug('Could not pre-parse card for conflict check:', parseErr);
+        }
     }
 
     const exists = preserveFileName ? characters.find(character => character.avatar === preserveFileName) : undefined;
@@ -10564,7 +10592,7 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
                 newCharData.name = DOMPurify.sanitize(newCharData.name);
                 if (!newCharData.chat) newCharData.chat = `${newCharData.name} - ${humanizedDateTime()}`;
                 newCharData.chat = String(newCharData.chat);
-                
+
                 if (exists) {
                     const index = characters.findIndex(c => c.avatar === avatarFileName);
                     if (index !== -1) characters[index] = newCharData;
@@ -12381,29 +12409,25 @@ jQuery(async function () {
                 let onlineUrl = getCharacterSource(this_chid);
 
                 const POPUP_RESULT_URL = POPUP_RESULT.CUSTOM1, POPUP_RESULT_FILE = POPUP_RESULT.CUSTOM2;
-                const result = await Popup.show.confirm(t`Replace Character`,
-                    `<p>${t`Choose a new character card to replace this character with.`}</p>` +
-                    `<p>${t`You can also replace this character with the one from the online source.`}${onlineUrl ? `<br />This character was downloaded from: <var>${onlineUrl}</var>` : ''}</p>` +
-                    `<p>${t`All chats, assets and group memberships will be preserved, but local changes to the character data will be lost.`}<br />${t`Proceed?`}</p>`,
+                const result = await Popup.show.confirm(t`Update Character Card`,
+                    `<p>${t`Choose a new character card file or URL to update this character.`}</p>` +
+                    `<p>${t`You can also update this character with the one from the online source.`}${onlineUrl ? `<br />This character was downloaded from: <var>${onlineUrl}</var>` : ''}</p>` +
+                    `<p>${t`All existing chats, chat histories, bookmarks, and custom settings will be preserved.`}</p>`,
                     {
                         okButton: false,
                         customButtons: [{
-                            text: t`Replace with URL`,
+                            text: t`Update with URL`,
                             result: POPUP_RESULT_URL,
                             classes: ['popup-button-ok'],
+                            icon: 'fa-solid fa-link',
                         }, {
-                            text: t`Replace with File`,
+                            text: t`Update with File`,
                             result: POPUP_RESULT_FILE,
                             classes: ['popup-button-ok'],
+                            icon: 'fa-solid fa-file-arrow-up',
                         }],
                         defaultResult: onlineUrl ? POPUP_RESULT_URL : POPUP_RESULT_FILE,
                     });
-
-                // Remember the chat currently selected, so we can reload it after the replacement
-                const currentChatFile = characters[this_chid].chat;
-                async function postReplace() {
-                    await openCharacterChat(currentChatFile);
-                }
 
                 switch (result) {
                     case POPUP_RESULT_FILE: {
@@ -12414,28 +12438,70 @@ jQuery(async function () {
                             }
 
                             try {
-                                const data = new Map();
-                                data.set(file, characters[this_chid].avatar);
-                                await processDroppedFiles([file], data);
-                                await postReplace();
-                            } catch {
-                                toastr.error('Failed to replace the character card.', 'Something went wrong');
+                                const parsed = await CardUpdateManager.parseCardFile(file);
+                                if (!parsed || !parsed.card) {
+                                    throw new Error('Invalid character card');
+                                }
+                                await CardUpdateManager.showCardUpdateDialog({
+                                    existingCharIndex: this_chid,
+                                    newCardData: parsed.card,
+                                    avatarFile: file,
+                                    avatarPreview: parsed.avatarPreview,
+                                });
+                            } catch (err) {
+                                console.error('Failed to update character card:', err);
+                                toastr.error(err.message || t`Failed to update the character card.`, t`Something went wrong`);
                             }
                         }
                         $('#character_replace_file').off('change').on('change', uploadReplacementCard).trigger('click');
                         break;
                     }
                     case POPUP_RESULT_URL: {
-                        const inputUrl = await Popup.show.input(t`Replace Character from URL`,
-                            `<p>${t`Enter the URL of the character card to replace this character with.`}</p>` +
+                        const inputUrl = await Popup.show.input(t`Update Character from URL`,
+                            `<p>${t`Enter the URL of the character card to update this character with.`}</p>` +
                             (onlineUrl ? `<p>${t`This character was downloaded from: <var>${onlineUrl}</var>`}</p>` : ''),
                             onlineUrl);
                         if (!inputUrl) {
                             break;
                         }
                         onlineUrl = inputUrl;
-                        await importFromExternalUrl(onlineUrl, { preserveFileName: characters[this_chid].avatar });
-                        await postReplace();
+
+                        try {
+                            const req = isValidUrl(onlineUrl)
+                                ? await fetch('/api/content/importURL', {
+                                    method: 'POST',
+                                    headers: getRequestHeaders(),
+                                    body: JSON.stringify({ url: onlineUrl }),
+                                })
+                                : await fetch('/api/content/importUUID', {
+                                    method: 'POST',
+                                    headers: getRequestHeaders(),
+                                    body: JSON.stringify({ url: onlineUrl }),
+                                });
+
+                            if (!req.ok) {
+                                throw new Error(`Fetch failed: ${req.statusText}`);
+                            }
+
+                            const data = await req.blob();
+                            const fileName = req.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'character.png';
+                            const file = new File([data], fileName, { type: data.type });
+
+                            const parsed = await CardUpdateManager.parseCardFile(file);
+                            if (!parsed || !parsed.card) {
+                                throw new Error('Invalid character card');
+                            }
+
+                            await CardUpdateManager.showCardUpdateDialog({
+                                existingCharIndex: this_chid,
+                                newCardData: parsed.card,
+                                avatarFile: file,
+                                avatarPreview: parsed.avatarPreview,
+                            });
+                        } catch (err) {
+                            console.error('Failed to update character card from URL:', err);
+                            toastr.error(err.message || t`Failed to update character from URL.`, t`Something went wrong`);
+                        }
                         break;
                     }
                 }

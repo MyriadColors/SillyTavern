@@ -1,0 +1,20 @@
+<div class="card-conflict-popup">
+    <h3 data-i18n="Character Already Exists">Character Already Exists</h3>
+    <div class="card-conflict-body">
+        <p>
+            <span data-i18n="A character with the name">A character with the name</span>
+            <strong>{{name}}</strong>
+            <span data-i18n="already exists in your character library.">already exists in your character library.</span>
+        </p>
+        <p data-i18n="card_conflict_desc">
+            You can update the existing character card to apply new definitions and features while keeping all your existing chats and settings, or import it as a separate duplicate.
+        </p>
+        <div class="card-conflict-preview flex-container alignItemsCenter gap10 marginTop10 marginBottom10 padding10">
+            <img class="avatar-preview-img rounded" src="{{existingAvatarUrl}}" alt="Character Avatar" style="width: 60px; height: 60px; object-fit: cover;" />
+            <div class="card-conflict-details flex1 justifyLeft">
+                <div class="fontBold">{{name}}</div>
+                <small class="opacity50">{{existingAvatarFile}}</small>
+            </div>
+        </div>
+    </div>
+</div>

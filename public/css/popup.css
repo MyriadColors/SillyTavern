@@ -219,3 +219,53 @@ body.no-blur .popup[open]::backdrop {
     /* Fix weird animation issue with font-scaling during popup open */
     backface-visibility: hidden;
 }
+
+/* Card Update Popup Styles */
+.card-update-comparison-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+@media (max-width: 600px) {
+    .card-update-comparison-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.card-update-col {
+    background-color: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.card-update-col-header {
+    background-color: var(--black30a);
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    font-size: 0.9em;
+}
+
+.card-update-avatar {
+    width: 64px;
+    height: 64px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.card-update-option-row {
+    padding: 6px 8px;
+    border-radius: 6px;
+    transition: background-color 0.2s ease;
+}
+
+.card-update-option-row:hover {
+    background-color: var(--white10a);
+}
+
+.highlight-block {
+    background-color: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor);
+}
