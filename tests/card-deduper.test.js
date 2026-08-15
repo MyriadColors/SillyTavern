@@ -1,13 +1,11 @@
 import { describe, test, expect, jest, beforeAll } from '@jest/globals';
+import { setConfigFilePath } from '../src/util.js';
 
-jest.unstable_mockModule('../src/util.js', () => ({
-    getConfigValue: jest.fn((_key, defaultValue) => defaultValue),
-    tryParse: (str) => { try { return JSON.parse(str); } catch { return undefined; } },
-    color: { red: str => str, yellow: str => str, green: str => str },
-    uuidv4: () => '1234-5678-90ab',
-    humanizedDateTime: () => '2026-08-15',
-    sanitize: str => str,
-}));
+try {
+    setConfigFilePath('../default/config.yaml');
+} catch {
+    // ignore if already set
+}
 
 jest.unstable_mockModule('../public/script.js', () => ({
     characters: [],

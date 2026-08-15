@@ -7691,7 +7691,7 @@ async function getChatResult() {
     }
 }
 
-function getFirstMessage() {
+export function getFirstMessage() {
     const firstMes = characters[this_chid]?.first_mes || '';
     const alternateGreetings = characters[this_chid]?.data?.alternate_greetings;
 

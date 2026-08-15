@@ -1,17 +1,13 @@
 import {
-    characters,
     getOneCharacter,
-    eventSource,
-    event_types,
     getRequestHeaders,
     getThumbnailUrl,
-    toastr,
     default_avatar,
     printCharacters,
     saveSettingsDebounced,
 } from '../script.js';
 import { renderTemplateAsync } from './templates.js';
-import { Popup, POPUP_RESULT, POPUP_TYPE, callGenericPopup } from './popup.js';
+import { Popup, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { tag_map } from './tags.js';
@@ -300,7 +296,7 @@ export class CardDeduperManager {
                     const ok = await Popup.show.confirm(
                         t`Consolidate Cluster: ${cluster.name}`,
                         `<p>${t`Are you sure you want to consolidate this cluster into <strong>${cluster.recommendedPrimary}</strong>?`}</p>` +
-                        `<p class="notes">${t`Safety Mode: <strong>${currentSettings.safeMode}</strong>. All chats and groups will be safely preserved.`}</p>`
+                        `<p class="notes">${t`Safety Mode: <strong>${currentSettings.safeMode}</strong>. All chats and groups will be safely preserved.`}</p>`,
                     );
                     if (ok) {
                         await CardDeduperManager.executeConsolidation(cluster, currentSettings);
@@ -318,7 +314,7 @@ export class CardDeduperManager {
             const ok = await Popup.show.confirm(
                 t`Consolidate All Duplicate Clusters`,
                 `<p>${t`This will consolidate all <strong>${currentClusters.length}</strong> duplicate clusters.`}</p>` +
-                `<p class="notes">${t`Safety Mode: <strong>${currentSettings.safeMode}</strong>. Automatic backup will be created.`}</p>`
+                `<p class="notes">${t`Safety Mode: <strong>${currentSettings.safeMode}</strong>. Automatic backup will be created.`}</p>`,
             );
             if (!ok) return;
 
@@ -377,7 +373,7 @@ export class CardDeduperManager {
                         const confirm = await Popup.show.confirm(
                             t`Restore Pre-Consolidation Snapshot`,
                             `<p>${t`Are you sure you want to restore the snapshot from <strong>${dateStr}</strong>?`}</p>` +
-                            `<p class="notes">${t`This will revert all character cards, chats, and groups to their exact state before this consolidation.`}</p>`
+                            `<p class="notes">${t`This will revert all character cards, chats, and groups to their exact state before this consolidation.`}</p>`,
                         );
                         if (confirm) {
                             await CardDeduperManager.restoreBackup(b.id);

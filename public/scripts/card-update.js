@@ -6,7 +6,6 @@ import {
     event_types,
     getRequestHeaders,
     getThumbnailUrl,
-    toastr,
     default_avatar,
     chat,
     chat_metadata,

@@ -2,10 +2,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { promises as fsPromises } from 'node:fs';
 import { Buffer } from 'node:buffer';
+import crypto from 'node:crypto';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import { sync as writeFileAtomicSync, default as writeFileAtomic } from 'write-file-atomic';
 import yaml from 'yaml';
 import _ from 'lodash';
 import mime from 'mime-types';
@@ -2310,7 +2311,7 @@ router.post('/dedupe/consolidate', async function (request, response) {
                                     const match = data.character_book.entries.find(e =>
                                         (e.id !== undefined && e.id === dupEntry.id) ||
                                         (e.comment && e.comment === dupEntry.comment) ||
-                                        (Array.isArray(e.keys) && Array.isArray(dupEntry.keys) && e.keys.join(',') === dupEntry.keys.join(','))
+                                        (Array.isArray(e.keys) && Array.isArray(dupEntry.keys) && e.keys.join(',') === dupEntry.keys.join(',')),
                                     );
                                     if (!match) {
                                         data.character_book.entries.push(_.cloneDeep(dupEntry));
