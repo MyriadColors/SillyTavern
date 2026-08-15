@@ -289,12 +289,14 @@ import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/Macro
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { CardUpdateManager } from './scripts/card-update.js';
+import { CardDeduperManager } from './scripts/card-deduper.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
     libs,
     getContext,
     CardUpdateManager,
+    CardDeduperManager,
 };
 
 export {
@@ -12505,6 +12507,9 @@ jQuery(async function () {
                         break;
                     }
                 }
+            } break;
+            case 'find_duplicates': {
+                await CardDeduperManager.openDeduperDialog();
             } break;
             case 'import_tags': {
                 await importTags(characters[this_chid], { importSetting: tag_import_setting.ASK });

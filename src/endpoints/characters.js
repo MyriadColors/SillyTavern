@@ -1838,3 +1838,660 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
         response.sendStatus(500);
     }
 });
+
+/**
+ * Normalizes a character name by removing numbered suffixes, copy tags, extensions, and whitespace.
+ * @param {string} name Character name or filename
+ * @returns {string}
+ */
+export function normalizeCharacterName(name) {
+    if (!name || typeof name !== 'string') return '';
+    return name
+        .replace(/\.png$/i, '')
+        .replace(/[\s_-]*\(\s*\d+\s*\)$/g, '') // e.g. " (1)" or "(2)"
+        .replace(/[\s_-]+\d+$/g, '') // e.g. " 1", "_1", "-1"
+        .replace(/[\s_-]+copy(?:\s*\d+)?$/i, '') // e.g. " - Copy"
+        .replace(/[\s_-]+v(?:er(?:sion)?)?\s*\d+(?:\.\d+)*$/i, '') // e.g. " v2", " - v1.0"
+        .trim()
+        .toLowerCase();
+}
+
+/**
+ * Computes a SHA-256 hash over normalized core card content fields.
+ * @param {object} card Character card object
+ * @returns {string}
+ */
+export function calculateContentHash(card) {
+    if (!card || typeof card !== 'object') return '';
+    const data = card.data || card;
+    const text = [
+        (data.description || '').trim(),
+        (data.personality || '').trim(),
+        (data.scenario || '').trim(),
+        (data.first_mes || '').trim(),
+        (data.mes_example || '').trim(),
+        (data.system_prompt || '').trim(),
+    ].join('\n---\n');
+    return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+/**
+ * Calculates Dice coefficient similarity between two strings using bigrams.
+ * @param {string} textA First text
+ * @param {string} textB Second text
+ * @returns {number} Value between 0.0 and 1.0
+ */
+export function calculateSimilarityScore(textA, textB) {
+    if (!textA || !textB) return 0;
+    const cleanA = textA.toLowerCase().replace(/\s+/g, ' ').trim();
+    const cleanB = textB.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (cleanA === cleanB) return 1;
+    if (cleanA.length < 2 || cleanB.length < 2) return 0;
+
+    const getBigrams = (str) => {
+        const bigrams = new Map();
+        for (let i = 0; i < str.length - 1; i++) {
+            const bigram = str.substring(i, i + 2);
+            bigrams.set(bigram, (bigrams.get(bigram) || 0) + 1);
+        }
+        return bigrams;
+    };
+
+    const bigramsA = getBigrams(cleanA);
+    const bigramsB = getBigrams(cleanB);
+    let intersection = 0;
+
+    for (const [bigram, countA] of bigramsA.entries()) {
+        const countB = bigramsB.get(bigram) || 0;
+        intersection += Math.min(countA, countB);
+    }
+
+    const totalBigrams = (cleanA.length - 1) + (cleanB.length - 1);
+    return (2 * intersection) / totalBigrams;
+}
+
+/**
+ * Retrieves chat count and total message count for a character.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {string} internalName Character internal folder name
+ * @returns {Promise<{ chatCount: number, messageCount: number }>}
+ */
+async function getCharacterChatStats(directories, internalName) {
+    const chatsPath = path.join(directories.chats, internalName);
+    if (!fs.existsSync(chatsPath)) {
+        return { chatCount: 0, messageCount: 0 };
+    }
+    try {
+        const files = await fsPromises.readdir(chatsPath, { withFileTypes: true });
+        const jsonlFiles = files.filter(f => f.isFile() && f.name.endsWith('.jsonl'));
+        let messageCount = 0;
+        for (const file of jsonlFiles) {
+            try {
+                const content = await fsPromises.readFile(path.join(chatsPath, file.name), 'utf8');
+                const lines = content.split('\n').filter(l => l.trim().length > 0);
+                messageCount += Math.max(0, lines.length - 1);
+            } catch {
+                // ignore unreadable file
+            }
+        }
+        return { chatCount: jsonlFiles.length, messageCount };
+    } catch {
+        return { chatCount: 0, messageCount: 0 };
+    }
+}
+
+router.post('/dedupe/scan', async function (request, response) {
+    try {
+        const {
+            matchTypes = ['name', 'hash'],
+            similarityThreshold = 0.85,
+            ignoredPairs = [],
+        } = request.body || {};
+
+        const charactersDir = request.user.directories.characters;
+        if (!fs.existsSync(charactersDir)) {
+            return response.json({ clusters: [], totalCharacters: 0, totalDuplicates: 0 });
+        }
+
+        const files = await fsPromises.readdir(charactersDir, { withFileTypes: true });
+        const pngFiles = files.filter(f => f.isFile() && f.name.toLowerCase().endsWith('.png'));
+
+        const cardRecords = [];
+
+        for (const file of pngFiles) {
+            const avatar = file.name;
+            const fullPath = path.join(charactersDir, avatar);
+            try {
+                const stat = await fsPromises.stat(fullPath);
+                const rawData = await readCharacterData(fullPath);
+                if (!rawData) continue;
+
+                const parsed = JSON.parse(rawData);
+                const card = getCharaCardV2(parsed, request.user.directories);
+                const data = card.data || card;
+                const internalName = path.parse(avatar).name;
+                const stats = await getCharacterChatStats(request.user.directories, internalName);
+
+                cardRecords.push({
+                    avatar,
+                    name: data.name || internalName,
+                    normalizedName: normalizeCharacterName(data.name || internalName),
+                    character_version: data.character_version || '',
+                    creator: data.creator || '',
+                    creator_notes: data.creator_notes || data.creatorcomment || '',
+                    contentHash: calculateContentHash(card),
+                    descriptionText: [data.description, data.personality, data.scenario].filter(Boolean).join(' '),
+                    chatCount: stats.chatCount,
+                    messageCount: stats.messageCount,
+                    mtime: stat.mtimeMs,
+                    size: stat.size,
+                    card,
+                });
+            } catch (err) {
+                console.warn(`Could not read character for dedupe scan: ${avatar}`, err);
+            }
+        }
+
+        const ignoredSet = new Set(ignoredPairs.map(p => Array.isArray(p) ? p.sort().join('::') : ''));
+        const isIgnored = (avA, avB) => ignoredSet.has([avA, avB].sort().join('::'));
+
+        const parent = new Map();
+        const find = (i) => {
+            if (parent.get(i) === i) return i;
+            const root = find(parent.get(i));
+            parent.set(i, root);
+            return root;
+        };
+        const union = (i, j) => {
+            const rootI = find(i);
+            const rootJ = find(j);
+            if (rootI !== rootJ) {
+                parent.set(rootI, rootJ);
+            }
+        };
+
+        for (let i = 0; i < cardRecords.length; i++) {
+            parent.set(i, i);
+        }
+
+        for (let i = 0; i < cardRecords.length; i++) {
+            for (let j = i + 1; j < cardRecords.length; j++) {
+                const a = cardRecords[i];
+                const b = cardRecords[j];
+
+                if (isIgnored(a.avatar, b.avatar)) {
+                    continue;
+                }
+
+                let matched = false;
+
+                if (matchTypes.includes('name') && a.normalizedName && a.normalizedName === b.normalizedName) {
+                    matched = true;
+                }
+
+                if (matchTypes.includes('hash') && a.contentHash && a.contentHash === b.contentHash) {
+                    matched = true;
+                }
+
+                if (matchTypes.includes('fuzzy') && a.descriptionText && b.descriptionText) {
+                    const score = calculateSimilarityScore(a.descriptionText, b.descriptionText);
+                    if (score >= similarityThreshold) {
+                        matched = true;
+                    }
+                }
+
+                if (matched) {
+                    union(i, j);
+                }
+            }
+        }
+
+        const clusterMap = new Map();
+        for (let i = 0; i < cardRecords.length; i++) {
+            const root = find(i);
+            if (!clusterMap.has(root)) {
+                clusterMap.set(root, []);
+            }
+            clusterMap.get(root).push(cardRecords[i]);
+        }
+
+        const clusters = [];
+        let totalDuplicates = 0;
+
+        for (const [root, members] of clusterMap.entries()) {
+            if (members.length < 2) {
+                continue;
+            }
+
+            members.sort((a, b) => {
+                const vA = parseFloat(a.character_version) || 0;
+                const vB = parseFloat(b.character_version) || 0;
+                if (vB !== vA) return vB - vA;
+                if (b.chatCount !== a.chatCount) return b.chatCount - a.chatCount;
+                return b.mtime - a.mtime;
+            });
+
+            const recommendedPrimary = members[0].avatar;
+            totalDuplicates += (members.length - 1);
+
+            clusters.push({
+                id: `cluster_${members[0].normalizedName || root}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                name: members[0].name,
+                normalizedName: members[0].normalizedName,
+                recommendedPrimary,
+                cards: members.map(m => ({
+                    avatar: m.avatar,
+                    name: m.name,
+                    character_version: m.character_version,
+                    creator: m.creator,
+                    creator_notes: m.creator_notes,
+                    chatCount: m.chatCount,
+                    messageCount: m.messageCount,
+                    mtime: m.mtime,
+                    size: m.size,
+                    isRecommendedPrimary: m.avatar === recommendedPrimary,
+                })),
+            });
+        }
+
+        return response.json({
+            clusters,
+            totalCharacters: cardRecords.length,
+            totalDuplicates,
+        });
+    } catch (err) {
+        console.error('Dedupe scan error:', err);
+        return response.status(500).send({ message: 'Error scanning for duplicates', error: err.message });
+    }
+});
+
+router.post('/dedupe/consolidate', async function (request, response) {
+    try {
+        const {
+            primaryAvatar,
+            duplicateAvatars = [],
+            strategy = 'smart_merge',
+            safeMode = 'trash',
+            options = {},
+        } = request.body || {};
+
+        if (!primaryAvatar || !Array.isArray(duplicateAvatars) || duplicateAvatars.length === 0) {
+            return response.status(400).send({ message: 'Missing primaryAvatar or duplicateAvatars' });
+        }
+
+        const charactersDir = request.user.directories.characters;
+        const chatsDir = request.user.directories.chats;
+        const groupsDir = request.user.directories.groups;
+        const backupsDir = path.join(request.user.directories.backups, 'dedupe');
+
+        const primaryPath = path.join(charactersDir, sanitize(primaryAvatar));
+        if (!fs.existsSync(primaryPath)) {
+            return response.status(404).send({ message: `Primary avatar not found: ${primaryAvatar}` });
+        }
+
+        const validDupAvatars = duplicateAvatars
+            .map(av => sanitize(av))
+            .filter(av => av !== primaryAvatar && fs.existsSync(path.join(charactersDir, av)));
+
+        if (validDupAvatars.length === 0) {
+            return response.status(400).send({ message: 'No valid duplicate avatars to consolidate' });
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupId = `dedupe_${timestamp}`;
+        const backupPath = path.join(backupsDir, backupId);
+
+        if (options.createBackup !== false) {
+            await fsPromises.mkdir(backupPath, { recursive: true });
+            await fsPromises.mkdir(path.join(backupPath, 'characters'), { recursive: true });
+            await fsPromises.mkdir(path.join(backupPath, 'chats'), { recursive: true });
+            await fsPromises.mkdir(path.join(backupPath, 'groups'), { recursive: true });
+
+            // Backup character cards
+            await fsPromises.copyFile(primaryPath, path.join(backupPath, 'characters', primaryAvatar));
+            for (const dup of validDupAvatars) {
+                await fsPromises.copyFile(path.join(charactersDir, dup), path.join(backupPath, 'characters', dup));
+            }
+
+            // Backup chats
+            const primaryInternal = path.parse(primaryAvatar).name;
+            const primaryChatDir = path.join(chatsDir, primaryInternal);
+            if (fs.existsSync(primaryChatDir)) {
+                await fsPromises.cp(primaryChatDir, path.join(backupPath, 'chats', primaryInternal), { recursive: true });
+            }
+
+            for (const dup of validDupAvatars) {
+                const dupInternal = path.parse(dup).name;
+                const dupChatDir = path.join(chatsDir, dupInternal);
+                if (fs.existsSync(dupChatDir)) {
+                    await fsPromises.cp(dupChatDir, path.join(backupPath, 'chats', dupInternal), { recursive: true });
+                }
+            }
+
+            // Backup groups
+            if (fs.existsSync(groupsDir)) {
+                const groupFiles = await fsPromises.readdir(groupsDir);
+                for (const gFile of groupFiles) {
+                    if (gFile.endsWith('.json')) {
+                        await fsPromises.copyFile(path.join(groupsDir, gFile), path.join(backupPath, 'groups', gFile));
+                    }
+                }
+            }
+
+            const manifest = {
+                id: backupId,
+                timestamp: new Date().toISOString(),
+                primaryAvatar,
+                duplicateAvatars: validDupAvatars,
+                strategy,
+                safeMode,
+            };
+            await writeFileAtomic(path.join(backupPath, 'manifest.json'), JSON.stringify(manifest, null, 4), 'utf8');
+        }
+
+        // 1. Migrate Chats
+        let totalChatsMigrated = 0;
+        const primaryInternal = path.parse(primaryAvatar).name;
+        const primaryChatDir = path.join(chatsDir, primaryInternal);
+        await fsPromises.mkdir(primaryChatDir, { recursive: true });
+
+        for (const dup of validDupAvatars) {
+            const dupInternal = path.parse(dup).name;
+            const dupChatDir = path.join(chatsDir, dupInternal);
+            if (fs.existsSync(dupChatDir)) {
+                const chatFiles = await fsPromises.readdir(dupChatDir);
+                for (const cFile of chatFiles) {
+                    if (cFile.endsWith('.jsonl')) {
+                        let destFile = cFile;
+                        let targetPath = path.join(primaryChatDir, destFile);
+                        if (fs.existsSync(targetPath)) {
+                            const ext = path.extname(cFile);
+                            const base = path.basename(cFile, ext);
+                            destFile = `${base} - (from ${dupInternal})${ext}`;
+                            targetPath = path.join(primaryChatDir, destFile);
+                        }
+                        await fsPromises.copyFile(path.join(dupChatDir, cFile), targetPath);
+                        totalChatsMigrated++;
+                    }
+                }
+                await fsPromises.rm(dupChatDir, { recursive: true, force: true });
+            }
+        }
+
+        // 2. Relink Groups
+        let groupsUpdatedCount = 0;
+        if (fs.existsSync(groupsDir) && options.updateGroups !== false) {
+            const groupFiles = await fsPromises.readdir(groupsDir);
+            for (const gFile of groupFiles) {
+                if (gFile.endsWith('.json')) {
+                    try {
+                        const gPath = path.join(groupsDir, gFile);
+                        const raw = await fsPromises.readFile(gPath, 'utf8');
+                        const groupObj = tryParse(raw);
+                        if (groupObj && Array.isArray(groupObj.members)) {
+                            let modified = false;
+                            const newMembers = [];
+                            for (const member of groupObj.members) {
+                                if (validDupAvatars.includes(member)) {
+                                    if (!newMembers.includes(primaryAvatar)) {
+                                        newMembers.push(primaryAvatar);
+                                    }
+                                    modified = true;
+                                } else {
+                                    if (!newMembers.includes(member)) {
+                                        newMembers.push(member);
+                                    }
+                                }
+                            }
+                            if (modified) {
+                                groupObj.members = newMembers;
+                                await writeFileAtomic(gPath, JSON.stringify(groupObj, null, 4), 'utf8');
+                                groupsUpdatedCount++;
+                            }
+                        }
+                    } catch (gErr) {
+                        console.warn(`Could not update group file ${gFile}:`, gErr);
+                    }
+                }
+            }
+        }
+
+        // 3. Migrate Expression Sprites
+        for (const dup of validDupAvatars) {
+            const dupInternal = path.parse(dup).name;
+            const dupSpriteDir = path.join(charactersDir, dupInternal);
+            const primarySpriteDir = path.join(charactersDir, primaryInternal);
+            if (fs.existsSync(dupSpriteDir)) {
+                await fsPromises.mkdir(primarySpriteDir, { recursive: true });
+                const spriteFiles = await fsPromises.readdir(dupSpriteDir);
+                for (const sFile of spriteFiles) {
+                    const targetSprite = path.join(primarySpriteDir, sFile);
+                    if (!fs.existsSync(targetSprite)) {
+                        await fsPromises.copyFile(path.join(dupSpriteDir, sFile), targetSprite);
+                    }
+                }
+                await fsPromises.rm(dupSpriteDir, { recursive: true, force: true });
+            }
+        }
+
+        // 4. Smart Merge Card Data into Primary if requested
+        if (strategy === 'smart_merge') {
+            try {
+                const primaryRaw = await readCharacterData(primaryPath);
+                if (primaryRaw) {
+                    let primaryCard = getCharaCardV2(JSON.parse(primaryRaw), request.user.directories);
+                    let data = primaryCard.data || primaryCard;
+
+                    for (const dup of validDupAvatars) {
+                        const dupRaw = await readCharacterData(path.join(charactersDir, dup));
+                        if (!dupRaw) continue;
+                        const dupCard = getCharaCardV2(JSON.parse(dupRaw), request.user.directories);
+                        const dupData = dupCard.data || dupCard;
+
+                        // Merge Alternate Greetings
+                        if (options.mergeGreetings !== false && Array.isArray(dupData.alternate_greetings)) {
+                            const existingGreetings = new Set(data.alternate_greetings || []);
+                            for (const g of dupData.alternate_greetings) {
+                                if (g && typeof g === 'string' && !existingGreetings.has(g)) {
+                                    if (!data.alternate_greetings) data.alternate_greetings = [];
+                                    data.alternate_greetings.push(g);
+                                    existingGreetings.add(g);
+                                }
+                            }
+                        }
+
+                        // Merge Character Book Entries
+                        if (options.mergeLorebook !== false && dupData.character_book && Array.isArray(dupData.character_book.entries)) {
+                            if (!data.character_book) {
+                                data.character_book = _.cloneDeep(dupData.character_book);
+                            } else {
+                                if (!Array.isArray(data.character_book.entries)) data.character_book.entries = [];
+                                for (const dupEntry of dupData.character_book.entries) {
+                                    const match = data.character_book.entries.find(e =>
+                                        (e.id !== undefined && e.id === dupEntry.id) ||
+                                        (e.comment && e.comment === dupEntry.comment) ||
+                                        (Array.isArray(e.keys) && Array.isArray(dupEntry.keys) && e.keys.join(',') === dupEntry.keys.join(','))
+                                    );
+                                    if (!match) {
+                                        data.character_book.entries.push(_.cloneDeep(dupEntry));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Merge Regex Scripts
+                        if (options.mergeRegex !== false && dupData.extensions?.regex_scripts && Array.isArray(dupData.extensions.regex_scripts)) {
+                            if (!data.extensions) data.extensions = {};
+                            if (!Array.isArray(data.extensions.regex_scripts)) data.extensions.regex_scripts = [];
+                            const existingScripts = new Set(data.extensions.regex_scripts.map(s => s.scriptName || s.id));
+                            for (const script of dupData.extensions.regex_scripts) {
+                                if (!existingScripts.has(script.scriptName || script.id)) {
+                                    data.extensions.regex_scripts.push(_.cloneDeep(script));
+                                    existingScripts.add(script.scriptName || script.id);
+                                }
+                            }
+                        }
+
+                        // Merge Tags
+                        if (options.mergeTags !== false && Array.isArray(dupData.tags)) {
+                            const existingTags = new Set(data.tags || []);
+                            for (const t of dupData.tags) {
+                                if (t && typeof t === 'string' && !existingTags.has(t)) {
+                                    if (!data.tags) data.tags = [];
+                                    data.tags.push(t);
+                                    existingTags.add(t);
+                                }
+                            }
+                        }
+                    }
+
+                    // Save merged primary card
+                    const primaryBuffer = await fsPromises.readFile(primaryPath);
+                    const updatedBuffer = write(primaryBuffer, JSON.stringify(primaryCard));
+                    await writeFileAtomic(primaryPath, updatedBuffer);
+                }
+            } catch (mergeErr) {
+                console.warn('Smart merge metadata warning:', mergeErr);
+            }
+        }
+
+        // 5. Dispose Duplicate Character Files according to SafeMode
+        const archiveDir = path.join(charactersDir, '_dedupe_archive');
+        if (safeMode === 'trash') {
+            await fsPromises.mkdir(archiveDir, { recursive: true });
+        }
+
+        for (const dup of validDupAvatars) {
+            const dupPath = path.join(charactersDir, dup);
+            invalidateThumbnail(request.user.directories, 'avatar', dup);
+            if (fs.existsSync(dupPath)) {
+                if (safeMode === 'trash') {
+                    const destArchive = path.join(archiveDir, `${dup}.disabled`);
+                    await fsPromises.rename(dupPath, destArchive);
+                } else if (safeMode === 'delete') {
+                    await fsPromises.unlink(dupPath);
+                }
+            }
+        }
+
+        return response.json({
+            success: true,
+            backupId,
+            primaryAvatar,
+            duplicatesProcessed: validDupAvatars.length,
+            chatsMigrated: totalChatsMigrated,
+            groupsUpdated: groupsUpdatedCount,
+            safeMode,
+        });
+    } catch (err) {
+        console.error('Dedupe consolidate error:', err);
+        return response.status(500).send({ message: 'Error consolidating duplicates', error: err.message });
+    }
+});
+
+router.post('/dedupe/backups', async function (request, response) {
+    try {
+        const backupsDir = path.join(request.user.directories.backups, 'dedupe');
+        if (!fs.existsSync(backupsDir)) {
+            return response.json({ backups: [] });
+        }
+
+        const entries = await fsPromises.readdir(backupsDir, { withFileTypes: true });
+        const backups = [];
+
+        for (const entry of entries) {
+            if (entry.isDirectory()) {
+                const manifestPath = path.join(backupsDir, entry.name, 'manifest.json');
+                if (fs.existsSync(manifestPath)) {
+                    try {
+                        const raw = await fsPromises.readFile(manifestPath, 'utf8');
+                        const manifest = tryParse(raw);
+                        if (manifest) {
+                            backups.push(manifest);
+                        }
+                    } catch {
+                        // ignore unreadable manifest
+                    }
+                }
+            }
+        }
+
+        backups.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        return response.json({ backups });
+    } catch (err) {
+        console.error('Dedupe backups error:', err);
+        return response.status(500).send({ message: 'Error listing backups', error: err.message });
+    }
+});
+
+router.post('/dedupe/restore', async function (request, response) {
+    try {
+        const { backupId } = request.body || {};
+        if (!backupId || typeof backupId !== 'string') {
+            return response.status(400).send({ message: 'Missing backupId' });
+        }
+
+        const backupsDir = path.join(request.user.directories.backups, 'dedupe');
+        const backupPath = path.join(backupsDir, sanitize(backupId));
+        const manifestPath = path.join(backupPath, 'manifest.json');
+
+        if (!fs.existsSync(manifestPath)) {
+            return response.status(404).send({ message: `Backup not found: ${backupId}` });
+        }
+
+        const manifestRaw = await fsPromises.readFile(manifestPath, 'utf8');
+        const manifest = tryParse(manifestRaw);
+        if (!manifest) {
+            return response.status(500).send({ message: 'Corrupted backup manifest' });
+        }
+
+        const charactersDir = request.user.directories.characters;
+        const chatsDir = request.user.directories.chats;
+        const groupsDir = request.user.directories.groups;
+        const archiveDir = path.join(charactersDir, '_dedupe_archive');
+
+        // Restore character cards
+        const backupCharDir = path.join(backupPath, 'characters');
+        if (fs.existsSync(backupCharDir)) {
+            const charFiles = await fsPromises.readdir(backupCharDir);
+            for (const cFile of charFiles) {
+                await fsPromises.copyFile(path.join(backupCharDir, cFile), path.join(charactersDir, cFile));
+                invalidateThumbnail(request.user.directories, 'avatar', cFile);
+
+                // If disabled archive exists, clean it up
+                const archivedFile = path.join(archiveDir, `${cFile}.disabled`);
+                if (fs.existsSync(archivedFile)) {
+                    await fsPromises.unlink(archivedFile).catch(() => {});
+                }
+            }
+        }
+
+        // Restore chats
+        const backupChatsDir = path.join(backupPath, 'chats');
+        if (fs.existsSync(backupChatsDir)) {
+            const chatDirs = await fsPromises.readdir(backupChatsDir);
+            for (const cDir of chatDirs) {
+                const targetChatDir = path.join(chatsDir, cDir);
+                await fsPromises.rm(targetChatDir, { recursive: true, force: true }).catch(() => {});
+                await fsPromises.cp(path.join(backupChatsDir, cDir), targetChatDir, { recursive: true });
+            }
+        }
+
+        // Restore groups
+        const backupGroupsDir = path.join(backupPath, 'groups');
+        if (fs.existsSync(backupGroupsDir)) {
+            const groupFiles = await fsPromises.readdir(backupGroupsDir);
+            for (const gFile of groupFiles) {
+                await fsPromises.copyFile(path.join(backupGroupsDir, gFile), path.join(groupsDir, gFile));
+            }
+        }
+
+        return response.json({
+            success: true,
+            message: 'Rollback completed successfully. All cards, chats, and groups restored.',
+        });
+    } catch (err) {
+        console.error('Dedupe restore error:', err);
+        return response.status(500).send({ message: 'Error restoring backup', error: err.message });
+    }
+});

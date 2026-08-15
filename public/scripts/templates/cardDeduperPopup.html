@@ -1,0 +1,148 @@
+<div class="card-deduper-dialog wide_dialogue_popup flex-container flexFlowColumn" style="max-height: 85vh; overflow: hidden;">
+    <div class="card-deduper-header flex-container justifySpaceBetween alignItemsCenter margin0" style="padding-bottom: 10px; border-bottom: 1px solid var(--SmartThemeBorderColor);">
+        <div class="flex-container alignItemsCenter" style="gap: 10px;">
+            <i class="fa-solid fa-clone fa-xl"></i>
+            <div>
+                <h3 class="margin0" data-i18n="Character Deduper & Consolidation">Character Deduper & Consolidation</h3>
+                <small class="notes" data-i18n="Safely scan, merge, and clean up duplicate character cards across your library.">Safely scan, merge, and clean up duplicate character cards across your library.</small>
+            </div>
+        </div>
+        <div class="flex-container" style="gap: 6px;">
+            <button id="card_deduper_tab_clusters" class="menu_button card-deduper-tab-btn active" data-i18n="Duplicate Clusters">
+                <i class="fa-solid fa-list-check"></i> <span data-i18n="Clusters">Clusters</span>
+            </button>
+            <button id="card_deduper_tab_settings" class="menu_button card-deduper-tab-btn" data-i18n="Detection & Safety">
+                <i class="fa-solid fa-shield-halved"></i> <span data-i18n="Safety & Settings">Safety & Settings</span>
+            </button>
+            <button id="card_deduper_tab_backups" class="menu_button card-deduper-tab-btn" data-i18n="Rollback & Backups">
+                <i class="fa-solid fa-clock-rotate-left"></i> <span data-i18n="Backups & Undo">Backups & Undo</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- TAB 1: DUPLICATE CLUSTERS -->
+    <div id="card_deduper_page_clusters" class="card-deduper-page flex-container flexFlowColumn flex1" style="overflow-y: auto; padding: 10px 0; gap: 12px;">
+        <div class="card-deduper-stats-bar flex-container justifySpaceBetween alignItemsCenter highlight-block" style="padding: 10px 14px; border-radius: 8px;">
+            <div>
+                <span id="card_deduper_stat_clusters" style="font-weight: bold; font-size: 1.1em;">0</span> <span data-i18n="Clusters Found">Clusters Found</span> &bull;
+                <span id="card_deduper_stat_duplicates" style="font-weight: bold; font-size: 1.1em;">0</span> <span data-i18n="Duplicate Cards">Duplicate Cards</span> &bull;
+                <span id="card_deduper_stat_chats" style="font-weight: bold; font-size: 1.1em;">0</span> <span data-i18n="Chats to Migrate">Chats to Migrate</span>
+            </div>
+            <div class="flex-container" style="gap: 8px;">
+                <button id="card_deduper_rescan_btn" class="menu_button menu_button_icon" title="Rescan Library">
+                    <i class="fa-solid fa-arrows-rotate"></i> <span data-i18n="Rescan">Rescan</span>
+                </button>
+                <button id="card_deduper_batch_consolidate_btn" class="menu_button popup-button-ok" data-i18n="Consolidate All Clusters">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> <span data-i18n="Consolidate All">Consolidate All</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="card_deduper_clusters_container" class="flex-container flexFlowColumn" style="gap: 14px;">
+            <!-- Clusters dynamically rendered here -->
+            <div class="card-deduper-loading flex-container flexFlowColumn alignItemsCenter justifyCenter" style="padding: 40px 0; gap: 10px;">
+                <i class="fa-solid fa-spinner fa-spin fa-2xl"></i>
+                <span data-i18n="Scanning character library for duplicates...">Scanning character library for duplicates...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 2: DETECTION & SAFETY SETTINGS -->
+    <div id="card_deduper_page_settings" class="card-deduper-page flex-container flexFlowColumn flex1" style="display: none; overflow-y: auto; padding: 10px 0; gap: 14px;">
+        <div class="highlight-block" style="padding: 12px 16px; border-radius: 8px;">
+            <h4 class="margin0" style="margin-bottom: 8px;"><i class="fa-solid fa-shield-cat"></i> <span data-i18n="Safety & Non-Destructive Protection">Safety & Non-Destructive Protection</span></h4>
+            <p class="notes margin0" style="margin-bottom: 12px;" data-i18n="Choose how duplicate cards are handled. Safe Trash ensures zero data loss.">Choose how duplicate cards are handled. Safe Trash ensures zero data loss by preserving original files in an archive folder.</p>
+
+            <div class="flex-container flexFlowColumn" style="gap: 8px;">
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="radio" name="card_deduper_safe_mode" value="trash" checked />
+                    <div>
+                        <strong><span data-i18n="Safe Trash / Archive (Recommended)">Safe Trash / Archive (Recommended)</span></strong>
+                        <div class="notes" data-i18n="Moves duplicate cards to characters/_dedupe_archive/ with .disabled extension. 100% recoverable.">Moves duplicate cards to <code>characters/_dedupe_archive/</code> with <code>.disabled</code> extension. 100% recoverable.</div>
+                    </div>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="radio" name="card_deduper_safe_mode" value="tag" />
+                    <div>
+                        <strong><span data-i18n="Non-Destructive Tagging Only">Non-Destructive Tagging Only</span></strong>
+                        <div class="notes" data-i18n="Keeps duplicate card files in place and adds #archived tag.">Keeps duplicate card files in place and adds <code>#archived</code> tag.</div>
+                    </div>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="radio" name="card_deduper_safe_mode" value="delete" />
+                    <div>
+                        <strong style="color: var(--crimson);"><span data-i18n="Permanent Deletion (Bypass Archive)">Permanent Deletion (Bypass Archive)</span></strong>
+                        <div class="notes" data-i18n="Permanently deletes duplicate .png files from disk. (Backup snapshot is still created).">Permanently deletes duplicate .png files from disk. (Backup snapshot is still created).</div>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <div class="highlight-block" style="padding: 12px 16px; border-radius: 8px;">
+            <h4 class="margin0" style="margin-bottom: 8px;"><i class="fa-solid fa-sliders"></i> <span data-i18n="Consolidation Options">Consolidation Options</span></h4>
+            <div class="flex-container flexFlowColumn" style="gap: 8px;">
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_opt_backup" checked />
+                    <span><strong data-i18n="Create automatic rollback backup snapshot before consolidating">Create automatic rollback backup snapshot before consolidating</strong></span>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_opt_chats" checked />
+                    <span><strong data-i18n="Migrate chat histories to primary card (Collision-Proof)">Migrate chat histories to primary card (Collision-Proof)</strong></span>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_opt_groups" checked />
+                    <span><strong data-i18n="Update group chat memberships referencing duplicates">Update group chat memberships referencing duplicates</strong></span>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_opt_lorebook" checked />
+                    <span><strong data-i18n="Smart-merge embedded character book (lorebook) entries">Smart-merge embedded character book (lorebook) entries</strong></span>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_opt_greetings" checked />
+                    <span><strong data-i18n="Append unique alternate greetings to primary card">Append unique alternate greetings to primary card</strong></span>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_opt_tags" checked />
+                    <span><strong data-i18n="Merge character tags (Union)">Merge character tags (Union)</strong></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="highlight-block" style="padding: 12px 16px; border-radius: 8px;">
+            <h4 class="margin0" style="margin-bottom: 8px;"><i class="fa-solid fa-magnifying-glass"></i> <span data-i18n="Detection Criteria">Detection Criteria</span></h4>
+            <div class="flex-container flexFlowColumn" style="gap: 8px;">
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_detect_name" checked />
+                    <span><strong data-i18n="Normalized Name Match">Normalized Name Match</strong> <small class="notes">(Matches 'Alice', 'Alice 1', 'Alice (2)', 'Alice - Copy')</small></span>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_detect_hash" checked />
+                    <span><strong data-i18n="Exact Content Hash">Exact Content Hash</strong> <small class="notes">(Matches 100% identical description/personality/scenario text)</small></span>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="card_deduper_detect_fuzzy" />
+                    <span><strong data-i18n="Fuzzy Text Similarity">Fuzzy Text Similarity</strong> <small class="notes">(Dice token similarity threshold &ge; 85%)</small></span>
+                </label>
+            </div>
+            <div class="flex-container justifyFlexEnd" style="margin-top: 10px;">
+                <button id="card_deduper_clear_whitelist_btn" class="menu_button" style="font-size: 0.85em;" data-i18n="Clear Ignored Pairs Whitelist">
+                    <i class="fa-solid fa-trash-can"></i> <span data-i18n="Reset Ignored Pairs">Reset Ignored Pairs</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 3: ROLLBACK & BACKUPS -->
+    <div id="card_deduper_page_backups" class="card-deduper-page flex-container flexFlowColumn flex1" style="display: none; overflow-y: auto; padding: 10px 0; gap: 12px;">
+        <div class="highlight-block" style="padding: 10px 14px; border-radius: 8px;">
+            <h4 class="margin0" style="margin-bottom: 4px;"><i class="fa-solid fa-clock-rotate-left"></i> <span data-i18n="Deduplication Snapshots & 1-Click Rollback">Deduplication Snapshots & 1-Click Rollback</span></h4>
+            <small class="notes" data-i18n="Every consolidation creates an automatic snapshot. You can undo any past operation below.">Every consolidation creates an automatic snapshot. You can undo any past operation below.</small>
+        </div>
+
+        <div id="card_deduper_backups_container" class="flex-container flexFlowColumn" style="gap: 10px;">
+            <div class="flex-container justifyCenter alignItemsCenter" style="padding: 30px 0;">
+                <i class="fa-solid fa-spinner fa-spin fa-xl"></i>
+            </div>
+        </div>
+    </div>
+</div>

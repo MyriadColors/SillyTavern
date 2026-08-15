@@ -269,3 +269,34 @@ body.no-blur .popup[open]::backdrop {
     background-color: var(--black30a);
     border: 1px solid var(--SmartThemeBorderColor);
 }
+
+/* Card Deduper Popup Styles */
+.card-deduper-dialog {
+    width: 780px;
+    max-width: 95vw;
+}
+
+.card-deduper-tab-btn {
+    padding: 4px 10px;
+    font-size: 0.85em;
+    opacity: 0.8;
+}
+
+.card-deduper-tab-btn.active {
+    opacity: 1;
+    background-color: var(--black50a);
+    box-shadow: inset 0 0 4px var(--white20a);
+}
+
+.card-deduper-card-item {
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.card-deduper-card-item:hover {
+    background-color: var(--white10a);
+}
+
+.card-deduper-card-item.is-primary-card {
+    border-color: var(--green);
+    background-color: var(--black50a);
+}
