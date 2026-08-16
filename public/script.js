@@ -94,6 +94,7 @@ import {
     applyPowerUserSettings,
     generatedTextFiltered,
     applyStylePins,
+    invalidateFuseIndexes,
 } from './scripts/power-user.js';
 
 import {
@@ -1010,14 +1011,19 @@ export async function printCharacters(fullRefresh = false) {
     // Before printing the personas, we check if we should enable/disable search sorting
     verifyCharactersSearchSortRule();
 
-    // We are actually always reprinting filters, as it "doesn't hurt", and this way they are always up to date
-    printTagFilters(tag_filter_type.character);
-    printTagFilters(tag_filter_type.group_members_list);
-    printTagFilters(tag_filter_type.group_candidates_list);
+    // Skip expensive tag-filter DOM rebuilds while the user is actively searching —
+    // the tag list is unchanged during search. They still run on full refresh or when search clears.
+    const isSearchActive = !fullRefresh && !!entitiesFilter.getFilterData(FILTER_TYPES.SEARCH);
+    if (!isSearchActive) {
+        // We are actually always reprinting filters, as it "doesn't hurt", and this way they are always up to date
+        printTagFilters(tag_filter_type.character);
+        printTagFilters(tag_filter_type.group_members_list);
+        printTagFilters(tag_filter_type.group_candidates_list);
 
-    // We are also always reprinting the lists on character/group edit window, as these ones doesn't get updated otherwise
-    applyTagsOnCharacterSelect();
-    applyTagsOnGroupSelect();
+        // We are also always reprinting the lists on character/group edit window, as these ones doesn't get updated otherwise
+        applyTagsOnCharacterSelect();
+        applyTagsOnGroupSelect();
+    }
 
     const entities = getEntitiesList({ doFilter: true });
 
@@ -1225,7 +1231,6 @@ export function getEntitiesList({ doFilter = false, doSort = true } = {}) {
     if (doSort) {
         sortEntitiesList(entities, false);
     }
-    entitiesFilter.clearFuzzySearchCaches();
     return entities;
 }
 
@@ -1334,6 +1339,7 @@ export async function getCharacters() {
         }
 
         await getGroups();
+        invalidateFuseIndexes('characters', 'groups');
         await printCharacters(true);
     } else {
         console.error('Failed to fetch characters:', response.statusText);
@@ -10603,6 +10609,7 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
                 } else {
                     characters.push(newCharData);
                 }
+                invalidateFuseIndexes('characters');
             }
 
             $('#character_search_bar').val('').trigger('input');
@@ -11098,7 +11105,7 @@ API Settings: ${JSON.stringify(getSettingsContents[getSettingsContents.main_api 
 function initCharacterSearch() {
     const debouncedCharacterSearch = debounce((searchQuery) => {
         entitiesFilter.setFilterData(FILTER_TYPES.SEARCH, searchQuery);
-    });
+    }, debounce_timeout.quick);
 
     const searchForm = $('#form_character_search_form');
     const searchInput = $('#character_search_bar');

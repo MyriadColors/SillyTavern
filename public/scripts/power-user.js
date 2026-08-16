@@ -2087,6 +2087,23 @@ async function loadContextSettings() {
     });
 }
 
+/** @type {Map<string, import('fuse.js').default>} Module-level Fuse index cache, keyed by fuzzySearchCategories value */
+const fuseIndexCache = new Map();
+
+/**
+ * Invalidate cached Fuse indexes for specified categories (or all if none given).
+ * Must be called whenever the underlying data arrays change (character/group/tag add, edit, or delete).
+ * @param {...string} categories - Category keys from {@link fuzzySearchCategories} to invalidate. Clears all when omitted.
+ */
+export function invalidateFuseIndexes(...categories) {
+    if (categories.length === 0) {
+        fuseIndexCache.clear();
+    } else {
+        for (const cat of categories) {
+            fuseIndexCache.delete(cat);
+        }
+    }
+}
 
 /**
  * Common function to perform fuzzy search with optional caching
@@ -2099,7 +2116,7 @@ async function loadContextSettings() {
  * @returns {import('fuse.js').FuseResult<T>[]} Results as items with their score
  */
 export function performFuzzySearch(type, data, keys, searchValue, fuzzySearchCaches = null) {
-    // Check cache if provided
+    // Check result cache if provided
     if (fuzzySearchCaches) {
         const cache = fuzzySearchCaches[type];
         if (cache?.resultMap.has(searchValue)) {
@@ -2107,13 +2124,18 @@ export function performFuzzySearch(type, data, keys, searchValue, fuzzySearchCac
         }
     }
 
-    const fuse = new Fuse(data, {
-        keys: keys,
-        includeScore: true,
-        ignoreLocation: true,
-        useExtendedSearch: true,
-        threshold: 0.2,
-    });
+    // Reuse or build the Fuse index for this category
+    let fuse = fuseIndexCache.get(type);
+    if (!fuse) {
+        fuse = new Fuse(data, {
+            keys: keys,
+            includeScore: true,
+            ignoreLocation: true,
+            useExtendedSearch: true,
+            threshold: 0.2,
+        });
+        fuseIndexCache.set(type, fuse);
+    }
 
     const results = fuse.search(searchValue);
 

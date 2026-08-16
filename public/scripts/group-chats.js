@@ -20,7 +20,7 @@ import {
     uuidv4,
 } from './utils.js';
 import { RA_CountCharTokens, humanizedDateTime, dragElement, favsToHotswap, getMessageTimeStamp } from './RossAscends-mods.js';
-import { power_user, loadMovingUIState, sortEntitiesList } from './power-user.js';
+import { power_user, loadMovingUIState, sortEntitiesList, invalidateFuseIndexes } from './power-user.js';
 import { debounce_timeout } from './constants.js';
 
 import {
@@ -789,6 +789,7 @@ async function getGroups() {
                 group.chats = group.chats.map(x => String(x));
             }
         }
+        invalidateFuseIndexes('groups');
     }
 }
 

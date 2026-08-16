@@ -17,7 +17,7 @@ import { FILTER_TYPES, FILTER_STATES, DEFAULT_FILTER_STATE, isFilterState, Filte
 
 import { groupCandidatesFilter, groupMembersFilter, groups, selected_group } from './group-chats.js';
 import { download, onlyUnique, parseJsonFile, uuidv4, getSortableDelay, flashHighlight, equalsIgnoreCaseAndAccents, includesIgnoreCaseAndAccents, removeFromArray, getFreeName, debounce, findChar, escapeHtml } from './utils.js';
-import { power_user } from './power-user.js';
+import { power_user, invalidateFuseIndexes } from './power-user.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
@@ -1131,6 +1131,7 @@ function createNewTag(tagName) {
 
     const tag = newTag(tagName);
     tags.push(tag);
+    invalidateFuseIndexes('tags');
     console.debug('Created new tag', tag.name, 'with id', tag.id);
     return tag;
 }
@@ -1874,6 +1875,7 @@ async function onTagRestoreFileSelect(e) {
 
         tags.push(tag);
     }
+    invalidateFuseIndexes('tags');
 
     // Import tag_map
     for (const key of Object.keys(data.tag_map)) {
@@ -1965,6 +1967,7 @@ async function onTagsPruneClick() {
     for (const tag of tagsToPrune) {
         tags.splice(tags.indexOf(tag), 1);
     }
+    invalidateFuseIndexes('tags');
 
     for (const key of tagMapsToPrune) {
         delete tag_map[key];
@@ -2152,6 +2155,7 @@ async function onTagDeleteClick() {
 
     const index = tags.findIndex(x => x.id === id);
     tags.splice(index, 1);
+    invalidateFuseIndexes('tags');
     $(`.tag[id="${id}"]`).remove();
     $(`.tag_view_item[id="${id}"]`).remove();
 
