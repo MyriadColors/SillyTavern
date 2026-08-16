@@ -8749,6 +8749,7 @@ export function select_selected_character(chid, { switchMenu = true } = {}) {
     switchMenu && setMenuType('character_edit');
     $('#delete_button').css('display', 'flex');
     $('#export_button').css('display', 'flex');
+    $('#update_card_button').show();
 
     //create text poles
     $('#rm_button_back').css('display', 'none');
@@ -8845,6 +8846,7 @@ function select_rm_create({ switchMenu = true } = {}) {
     $('#delete_button_div').css('display', 'none');
     $('#delete_button').css('display', 'none');
     $('#export_button').css('display', 'none');
+    $('#update_card_button').hide();
     $('#create_button_label').css('display', '');
     $('#create_button').attr('value', 'Create');
     $('#dupe_button').hide();
@@ -12378,6 +12380,125 @@ jQuery(async function () {
         }
     });
 
+    async function handleUpdateCardAction() {
+        if (this_chid === undefined || !characters[this_chid]) {
+            toastr.warning(t`Please select a character first.`);
+            return;
+        }
+
+        let onlineUrl = getCharacterSource(this_chid);
+
+        const POPUP_RESULT_URL = POPUP_RESULT.CUSTOM1, POPUP_RESULT_FILE = POPUP_RESULT.CUSTOM2;
+        const result = await Popup.show.confirm(
+            t`Update Character Card`,
+            `<p>${t`Choose a new character card file or URL to update this character.`}</p>` +
+            `<p>${t`You can also update this character with the one from the online source.`}${onlineUrl ? `<br />This character was downloaded from: <var>${onlineUrl}</var>` : ''}</p>` +
+            `<p>${t`All existing chats, chat histories, bookmarks, and custom settings will be preserved.`}</p>`,
+            {
+                okButton: false,
+                customButtons: [{
+                    text: t`Update with URL`,
+                    result: POPUP_RESULT_URL,
+                    classes: ['popup-button-ok'],
+                    icon: 'fa-solid fa-link',
+                }, {
+                    text: t`Update with File`,
+                    result: POPUP_RESULT_FILE,
+                    classes: ['popup-button-ok'],
+                    icon: 'fa-solid fa-file-arrow-up',
+                }],
+                defaultResult: onlineUrl ? POPUP_RESULT_URL : POPUP_RESULT_FILE,
+            },
+        );
+
+        switch (result) {
+            case POPUP_RESULT_FILE: {
+                async function uploadReplacementCard(e) {
+                    const file = e.target.files[0];
+                    if (!file) {
+                        return;
+                    }
+
+                    try {
+                        const parsed = await CardUpdateManager.parseCardFile(file);
+                        if (!parsed || !parsed.card) {
+                            throw new Error('Invalid character card');
+                        }
+                        await CardUpdateManager.showCardUpdateDialog({
+                            existingCharIndex: this_chid,
+                            newCardData: parsed.card,
+                            avatarFile: file,
+                            avatarPreview: parsed.avatarPreview,
+                        });
+                    } catch (err) {
+                        console.error('Failed to update character card:', err);
+                        toastr.error(err.message || t`Failed to update the character card.`, t`Something went wrong`);
+                    }
+                }
+                $('#character_replace_file').off('change').on('change', uploadReplacementCard).trigger('click');
+                break;
+            }
+            case POPUP_RESULT_URL: {
+                const inputUrl = await Popup.show.input(
+                    t`Update Character from URL`,
+                    `<p>${t`Enter the URL of the character card to update this character with.`}</p>` +
+                    (onlineUrl ? `<p>${t`This character was downloaded from: <var>${onlineUrl}</var>`}</p>` : ''),
+                    onlineUrl,
+                );
+                if (!inputUrl) {
+                    break;
+                }
+                onlineUrl = inputUrl;
+
+                try {
+                    const req = isValidUrl(onlineUrl)
+                        ? await fetch('/api/content/importURL', {
+                            method: 'POST',
+                            headers: getRequestHeaders(),
+                            body: JSON.stringify({ url: onlineUrl }),
+                        })
+                        : await fetch('/api/content/importUUID', {
+                            method: 'POST',
+                            headers: getRequestHeaders(),
+                            body: JSON.stringify({ url: onlineUrl }),
+                        });
+
+                    if (!req.ok) {
+                        throw new Error(`Fetch failed: ${req.statusText}`);
+                    }
+
+                    const data = await req.blob();
+                    const fileName = req.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'character.png';
+                    const file = new File([data], fileName, { type: data.type });
+
+                    const parsed = await CardUpdateManager.parseCardFile(file);
+                    if (!parsed || !parsed.card) {
+                        throw new Error('Invalid character card');
+                    }
+
+                    await CardUpdateManager.showCardUpdateDialog({
+                        existingCharIndex: this_chid,
+                        newCardData: parsed.card,
+                        avatarFile: file,
+                        avatarPreview: parsed.avatarPreview,
+                    });
+                } catch (err) {
+                    console.error('Failed to update character card from URL:', err);
+                    toastr.error(err.message || t`Failed to update character from URL.`, t`Something went wrong`);
+                }
+                break;
+            }
+        }
+    }
+
+    $('#update_card_button').on('click', async () => {
+        await handleUpdateCardAction();
+    });
+
+    $('#rm_button_dedupe, #character_deduper_settings_button').on('click', async () => {
+        await CardDeduperManager.openDeduperDialog();
+    });
+
     $('#char-management-dropdown').on('change', async (e) => {
         const targetElement = /** @type {HTMLSelectElement} */ (e.target);
         const target = $(targetElement.selectedOptions).attr('id');
@@ -12408,105 +12529,7 @@ jQuery(async function () {
                 }
             } break;
             case 'replace_update': {
-                let onlineUrl = getCharacterSource(this_chid);
-
-                const POPUP_RESULT_URL = POPUP_RESULT.CUSTOM1, POPUP_RESULT_FILE = POPUP_RESULT.CUSTOM2;
-                const result = await Popup.show.confirm(t`Update Character Card`,
-                    `<p>${t`Choose a new character card file or URL to update this character.`}</p>` +
-                    `<p>${t`You can also update this character with the one from the online source.`}${onlineUrl ? `<br />This character was downloaded from: <var>${onlineUrl}</var>` : ''}</p>` +
-                    `<p>${t`All existing chats, chat histories, bookmarks, and custom settings will be preserved.`}</p>`,
-                    {
-                        okButton: false,
-                        customButtons: [{
-                            text: t`Update with URL`,
-                            result: POPUP_RESULT_URL,
-                            classes: ['popup-button-ok'],
-                            icon: 'fa-solid fa-link',
-                        }, {
-                            text: t`Update with File`,
-                            result: POPUP_RESULT_FILE,
-                            classes: ['popup-button-ok'],
-                            icon: 'fa-solid fa-file-arrow-up',
-                        }],
-                        defaultResult: onlineUrl ? POPUP_RESULT_URL : POPUP_RESULT_FILE,
-                    });
-
-                switch (result) {
-                    case POPUP_RESULT_FILE: {
-                        async function uploadReplacementCard(e) {
-                            const file = e.target.files[0];
-                            if (!file) {
-                                return;
-                            }
-
-                            try {
-                                const parsed = await CardUpdateManager.parseCardFile(file);
-                                if (!parsed || !parsed.card) {
-                                    throw new Error('Invalid character card');
-                                }
-                                await CardUpdateManager.showCardUpdateDialog({
-                                    existingCharIndex: this_chid,
-                                    newCardData: parsed.card,
-                                    avatarFile: file,
-                                    avatarPreview: parsed.avatarPreview,
-                                });
-                            } catch (err) {
-                                console.error('Failed to update character card:', err);
-                                toastr.error(err.message || t`Failed to update the character card.`, t`Something went wrong`);
-                            }
-                        }
-                        $('#character_replace_file').off('change').on('change', uploadReplacementCard).trigger('click');
-                        break;
-                    }
-                    case POPUP_RESULT_URL: {
-                        const inputUrl = await Popup.show.input(t`Update Character from URL`,
-                            `<p>${t`Enter the URL of the character card to update this character with.`}</p>` +
-                            (onlineUrl ? `<p>${t`This character was downloaded from: <var>${onlineUrl}</var>`}</p>` : ''),
-                            onlineUrl);
-                        if (!inputUrl) {
-                            break;
-                        }
-                        onlineUrl = inputUrl;
-
-                        try {
-                            const req = isValidUrl(onlineUrl)
-                                ? await fetch('/api/content/importURL', {
-                                    method: 'POST',
-                                    headers: getRequestHeaders(),
-                                    body: JSON.stringify({ url: onlineUrl }),
-                                })
-                                : await fetch('/api/content/importUUID', {
-                                    method: 'POST',
-                                    headers: getRequestHeaders(),
-                                    body: JSON.stringify({ url: onlineUrl }),
-                                });
-
-                            if (!req.ok) {
-                                throw new Error(`Fetch failed: ${req.statusText}`);
-                            }
-
-                            const data = await req.blob();
-                            const fileName = req.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'character.png';
-                            const file = new File([data], fileName, { type: data.type });
-
-                            const parsed = await CardUpdateManager.parseCardFile(file);
-                            if (!parsed || !parsed.card) {
-                                throw new Error('Invalid character card');
-                            }
-
-                            await CardUpdateManager.showCardUpdateDialog({
-                                existingCharIndex: this_chid,
-                                newCardData: parsed.card,
-                                avatarFile: file,
-                                avatarPreview: parsed.avatarPreview,
-                            });
-                        } catch (err) {
-                            console.error('Failed to update character card from URL:', err);
-                            toastr.error(err.message || t`Failed to update character from URL.`, t`Something went wrong`);
-                        }
-                        break;
-                    }
-                }
+                await handleUpdateCardAction();
             } break;
             case 'find_duplicates': {
                 await CardDeduperManager.openDeduperDialog();

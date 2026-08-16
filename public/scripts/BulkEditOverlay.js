@@ -158,6 +158,7 @@ class CharacterContextMenu {
             { id: 'character_context_menu_delete', callback: characterGroupOverlay.handleContextMenuDelete },
             { id: 'character_context_menu_persona', callback: characterGroupOverlay.handleContextMenuPersona },
             { id: 'character_context_menu_tag', callback: characterGroupOverlay.handleContextMenuTag },
+            { id: 'character_context_menu_dedupe', callback: characterGroupOverlay.handleContextMenuDedupe },
         ];
 
         contextMenuItems.forEach(contextMenuItem => document.getElementById(contextMenuItem.id).addEventListener('click', contextMenuItem.callback));
@@ -871,6 +872,15 @@ class BulkEditOverlay {
      */
     handleContextMenuTag = () => {
         CharacterContextMenu.tag(this.selectedCharacters);
+        this.browseState();
+    };
+
+    /**
+     * Opens the deduplication dialog
+     */
+    handleContextMenuDedupe = async () => {
+        const { CardDeduperManager } = await import('./card-deduper.js');
+        await CardDeduperManager.openDeduperDialog();
         this.browseState();
     };
 
