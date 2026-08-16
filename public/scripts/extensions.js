@@ -1041,8 +1041,7 @@ function generateExtensionElement(name, manifest, isActive, isDisabled, isExtern
     }
 
     if (isExternal && isUserAdmin) {
-        actionsDiv.appendChild(makeActionButton('btn_branch', externalId, t`Switch branch`, 'fa-solid fa-code-branch fa-fw'));
-        actionsDiv.appendChild(makeActionButton('btn_move', externalId, t`Move`, 'fa-solid fa-folder-tree fa-fw'));
+        actionsDiv.appendChild(buildOverflowMenu(externalId));
     }
 
     if (isExternal) {
@@ -1120,6 +1119,143 @@ function getExtensionLoadErrors() {
 }
 
 /**
+ * Builds a live-search input and status-filter pills for the extensions popup.
+ * Hides non-matching extension blocks on each keystroke or pill change.
+ * @param {HTMLElement} defaultContainer  The built-in extensions container.
+ * @param {HTMLElement} externalContainer The third-party extensions container.
+ * @returns {HTMLElement}
+ */
+function buildSearchFilterRow(defaultContainer, externalContainer) {
+    const row = document.createElement('div');
+    row.classList.add('extensions_search_row');
+
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.classList.add('text_pole', 'extensions_search_input');
+    searchInput.placeholder = t`Search extensions...`;
+
+    const filterContainer = document.createElement('div');
+    filterContainer.classList.add('extensions_filter_pills');
+
+    const filterOptions = [
+        { label: t`All`, value: 'all' },
+        { label: t`Enabled`, value: 'enabled' },
+        { label: t`Disabled`, value: 'disabled' },
+    ];
+
+    let activeFilter = 'all';
+
+    function applyFilter() {
+        const query = searchInput.value.toLowerCase().trim();
+        const allBlocks = [
+            ...defaultContainer.querySelectorAll('.extension_block'),
+            ...externalContainer.querySelectorAll('.extension_block'),
+        ];
+
+        for (const block of allBlocks) {
+            const text = [
+                block.querySelector('.extension_name')?.textContent,
+                block.querySelector('.extension_author')?.textContent,
+                block.querySelector('.extension_version')?.textContent,
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase();
+
+            const matchesQuery = !query || text.includes(query);
+            const toggleInput = block.querySelector('input[type="checkbox"]');
+            const isEnabled = toggleInput?.checked ?? false;
+            const matchesFilter =
+                activeFilter === 'all' ||
+                (activeFilter === 'enabled' && isEnabled) ||
+                (activeFilter === 'disabled' && !isEnabled);
+
+            block.style.display = matchesQuery && matchesFilter ? '' : 'none';
+        }
+    }
+
+    searchInput.addEventListener('input', applyFilter);
+
+    for (const { label, value } of filterOptions) {
+        const pill = document.createElement('div');
+        pill.classList.add('extensions_filter_pill');
+        if (value === 'all') {
+            pill.classList.add('active');
+        }
+        pill.textContent = label;
+        pill.dataset.filterValue = value;
+        pill.addEventListener('click', () => {
+            activeFilter = value;
+            filterContainer.querySelectorAll('.extensions_filter_pill').forEach(p => p.classList.remove('active'));
+            pill.classList.add('active');
+            applyFilter();
+        });
+        filterContainer.appendChild(pill);
+    }
+
+    row.appendChild(searchInput);
+    row.appendChild(filterContainer);
+    return row;
+}
+
+/**
+ * Builds an overflow (⋮) button that houses admin-only extension actions.
+ * Uses a one-shot document-click listener so no listeners accumulate.
+ * @param {string} externalId External extension name (without the 'third-party' prefix).
+ * @returns {HTMLElement}
+ */
+function buildOverflowMenu(externalId) {
+    const wrapper = document.createElement('div');
+    wrapper.classList.add('extension_overflow_menu');
+
+    const trigger = document.createElement('button');
+    trigger.classList.add('menu_button');
+    trigger.title = t`More actions`;
+    const triggerIcon = document.createElement('i');
+    triggerIcon.classList.add('fa-solid', 'fa-ellipsis-vertical', 'fa-fw');
+    trigger.appendChild(triggerIcon);
+
+    const items = document.createElement('div');
+    items.classList.add('overflow_items');
+
+    /**
+     * @param {string} cls
+     * @param {string} dataName
+     * @param {string} label
+     * @param {string} iconClasses Space-separated FA icon class string
+     * @returns {HTMLButtonElement}
+     */
+    function makeOverflowItem(cls, dataName, label, iconClasses) {
+        const btn = document.createElement('button');
+        btn.classList.add(cls, 'menu_button');
+        btn.dataset.name = dataName;
+        btn.title = label;
+        const icon = document.createElement('i');
+        icon.classList.add(...iconClasses.split(' '));
+        const span = document.createElement('span');
+        span.textContent = label;
+        btn.append(icon, span);
+        return btn;
+    }
+
+    items.appendChild(makeOverflowItem('btn_branch', externalId, t`Switch branch`, 'fa-solid fa-code-branch fa-fw'));
+    items.appendChild(makeOverflowItem('btn_move', externalId, t`Move`, 'fa-solid fa-folder-tree fa-fw'));
+
+    trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = wrapper.classList.toggle('open');
+        if (isOpen) {
+            // One-shot listener closes the menu on the next outside click.
+            document.addEventListener('click', () => wrapper.classList.remove('open'), { once: true, capture: true });
+        }
+    });
+
+    wrapper.appendChild(trigger);
+    wrapper.appendChild(items);
+    return wrapper;
+}
+
+/**
  * Generates the HTML strings for all extensions and displays them in a popup.
  */
 async function showExtensionsDetails() {
@@ -1175,12 +1311,34 @@ async function showExtensionsDetails() {
             container.appendChild(extensionElement);
         });
 
+        const searchRow = buildSearchFilterRow(defaultContainer, externalContainer);
+        const pendingBanner = document.createElement('div');
+        pendingBanner.classList.add('extensions_pending_banner');
+
+        function updatePendingBanner() {
+            const count = extensionsToToggle.length;
+            if (count > 0 || stateChanged) {
+                pendingBanner.style.display = 'block';
+                if (count > 0) {
+                    pendingBanner.textContent = t`${count} extension(s) will be toggled on close. Page will reload.`;
+                } else {
+                    pendingBanner.textContent = t`Extension settings changed. Page will reload on close.`;
+                }
+            } else {
+                pendingBanner.style.display = 'none';
+            }
+        }
+
         const extensionsMenu = $('<div></div>')
             .addClass('extensions_info')
             .append(errors)
+            .append(searchRow)
+            .append(pendingBanner)
             .append(defaultContainer)
             .append(externalContainer)
             .append(getModuleInformation());
+
+        extensionsMenu.on('change', '.extension_toggle input', () => updatePendingBanner());
 
         {
             const updateAction = async (force) => {
@@ -1191,6 +1349,16 @@ async function showExtensionsDetails() {
 
             const toolbar = document.createElement('div');
             toolbar.classList.add('extensions_toolbar');
+
+            const installButton = document.createElement('button');
+            installButton.classList.add('menu_button', 'menu_button_icon');
+            installButton.title = t`Install extension from Git repository`;
+            const installIcon = document.createElement('i');
+            installIcon.classList.add('fa-solid', 'fa-cloud-arrow-down', 'fa-fw');
+            const installLabel = document.createElement('span');
+            installLabel.textContent = t`Install extension`;
+            installButton.append(installIcon, installLabel);
+            installButton.addEventListener('click', () => openThirdPartyExtensionMenu());
 
             const updateAllButton = document.createElement('button');
             updateAllButton.classList.add('menu_button', 'menu_button_icon');
@@ -1226,12 +1394,13 @@ async function showExtensionsDetails() {
                         .off('click')
                         .one('click', () => {
                             extensionsToToggle = extensionsToToggle.filter(ext => ext.name !== name);
+                            updatePendingBanner();
                         });
                 }
 
                 const restoreButtonHandler = extensionsToToggle.length > 0 ? 'remove' : 'add';
-
                 restoreBulkToggledExtensionsButton.classList[restoreButtonHandler]('displayNone');
+                updatePendingBanner();
             });
 
             restoreBulkToggledExtensionsButton.addEventListener('click', () => {
@@ -1249,21 +1418,30 @@ async function showExtensionsDetails() {
 
                 extensionsToToggle = [];
                 restoreBulkToggledExtensionsButton.classList.add('displayNone');
+                updatePendingBanner();
             });
 
             const flexExpander = document.createElement('div');
             flexExpander.classList.add('expander');
 
-            const sortOrderButton = document.createElement('button');
-            sortOrderButton.classList.add('menu_button', 'menu_button_icon');
-            sortOrderButton.textContent = sortByName ? t`Sort: Display Name` : t`Sort: Loading Order`;
-            sortOrderButton.addEventListener('click', async () => {
+            const sortOrderSelect = document.createElement('select');
+            sortOrderSelect.classList.add('text_pole', 'extensions_sort_select');
+            const sortOptName = document.createElement('option');
+            sortOptName.value = 'name';
+            sortOptName.textContent = t`Sort: Display Name`;
+            sortOptName.selected = sortByName;
+            const sortOptOrder = document.createElement('option');
+            sortOptOrder.value = 'order';
+            sortOptOrder.textContent = t`Sort: Loading Order`;
+            sortOptOrder.selected = !sortByName;
+            sortOrderSelect.append(sortOptName, sortOptOrder);
+            sortOrderSelect.addEventListener('change', async () => {
                 abortController.abort();
-                accountStorage.setItem(sortOrderKey, sortByName ? 'false' : 'true');
+                accountStorage.setItem(sortOrderKey, sortOrderSelect.value === 'name' ? 'true' : 'false');
                 await showExtensionsDetails();
             });
 
-            toolbar.append(updateAllButton, updateEnabledOnlyButton, flexExpander, sortOrderButton);
+            toolbar.append(installButton, updateAllButton, updateEnabledOnlyButton, flexExpander, sortOrderSelect);
             thirdPartyToolbar.append(restoreBulkToggledExtensionsButton, toggleAllExtensionsButton);
             extensionsMenu.prepend(toolbar);
         }
@@ -1693,9 +1871,10 @@ async function switchExtensionBranch(extensionName, isGlobal, branch) {
  * @param {string} url Extension repository URL
  * @param {boolean} global Is the extension global?
  * @param {string} [branch] Optional branch to install, if not provided the default branch will be used
+ * @param {boolean} [skipWarning=false] If true, skip the secondary confirmation warning dialog
  * @returns {Promise<boolean>} True if the extension was installed successfully, false otherwise
  */
-export async function installExtension(url, global, branch = '') {
+export async function installExtension(url, global, branch = '', skipWarning = false) {
     try {
         const parsedUrl = new URL(url);
         if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
@@ -1710,7 +1889,7 @@ export async function installExtension(url, global, branch = '') {
         return false;
     }
 
-    if (!isOfficialExtension(url)) {
+    if (!skipWarning && !isOfficialExtension(url)) {
         const extensionInstallationWarningKey = 'extensionInstallationWarningShown';
         if (accountStorage.getItem(extensionInstallationWarningKey)) {
             console.debug('Bypassed URL check for third-party extension (account preference).', url);
@@ -2254,7 +2433,7 @@ export async function openThirdPartyExtensionMenu(suggestUrl = '') {
 
     const url = String(input).trim();
     const branchName = String(popup.inputResults.get('extension_branch_name') ?? '').trim();
-    await installExtension(url, global, branchName);
+    await installExtension(url, global, branchName, true);
 }
 
 /**

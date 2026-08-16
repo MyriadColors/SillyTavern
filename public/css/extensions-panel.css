@@ -166,9 +166,101 @@ input.extension_missing[type="checkbox"] {
     position: sticky;
     display: flex;
     flex-direction: row;
+    align-items: center;
     background-color: var(--SmartThemeBlurTintColor);
     gap: 5px;
     z-index: 1;
     margin-bottom: 10px;
     padding: 5px;
 }
+
+.extensions_search_row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.extensions_search_input {
+    flex: 1;
+    min-width: 150px;
+}
+
+.extensions_filter_pills {
+    display: flex;
+    gap: 5px;
+}
+
+.extensions_filter_pill {
+    padding: 3px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    border: 1px solid var(--SmartThemeBorderColor);
+    user-select: none;
+    font-size: 0.85em;
+    opacity: 0.7;
+    transition: opacity 0.2s, background-color 0.2s;
+}
+
+.extensions_filter_pill:hover {
+    opacity: 1;
+}
+
+.extensions_filter_pill.active {
+    background-color: var(--SmartThemeBorderColor);
+    opacity: 1;
+    font-weight: bold;
+}
+
+.extensions_pending_banner {
+    display: none;
+    padding: 8px 12px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    background-color: var(--SmartThemeQuoteBlockBgColor, rgba(255, 200, 0, 0.15));
+    border: 1px solid var(--SmartThemeBorderColor);
+    font-size: 0.9em;
+}
+
+.extensions_sort_select {
+    max-width: 160px;
+    font-size: 0.9em;
+}
+
+.extension_overflow_menu {
+    position: relative;
+    display: inline-flex;
+}
+
+.extension_overflow_menu .overflow_items {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 100%;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    z-index: 20;
+    min-width: 140px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    padding: 4px;
+    backdrop-filter: blur(10px);
+}
+
+.extension_overflow_menu.open .overflow_items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.extension_overflow_menu .overflow_items .menu_button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 6px 10px;
+    border-radius: 4px;
+}
+
