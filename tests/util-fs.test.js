@@ -1,9 +1,15 @@
-import { afterEach, beforeEach, describe, test, expect, jest } from '@jest/globals';
+import { afterEach, beforeAll, beforeEach, describe, test, expect, jest } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getImages } from '../src/util';
+import { getImages, readFirstLine, setConfigFilePath } from '../src/util';
 import { MEDIA_REQUEST_TYPE } from '../src/constants';
+
+try {
+    setConfigFilePath('../default/config.yaml');
+} catch {
+    // ignore if already set
+}
 
 describe('getImages', () => {
     let tmpDir;
@@ -132,5 +138,156 @@ describe('getImages', () => {
     test('returns empty array for an empty directory', () => {
         expect(getImages(tmpDir, 'name')).toEqual([]);
         expect(getImages(tmpDir, 'date')).toEqual([]);
+    });
+});
+
+describe('readFirstLine', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-readfirstline-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('reads first line from single-line file', async () => {
+        const filePath = path.join(tmpDir, 'single.txt');
+        fs.writeFileSync(filePath, 'hello world');
+        const line = await readFirstLine(filePath);
+        expect(line).toBe('hello world');
+    });
+
+    test('reads only the first line from multi-line file', async () => {
+        const filePath = path.join(tmpDir, 'multi.txt');
+        fs.writeFileSync(filePath, 'line 1\nline 2\nline 3');
+        const line = await readFirstLine(filePath);
+        expect(line).toBe('line 1');
+    });
+
+    test('returns empty string for empty file', async () => {
+        const filePath = path.join(tmpDir, 'empty.txt');
+        fs.writeFileSync(filePath, '');
+        const line = await readFirstLine(filePath);
+        expect(line).toBe('');
+    });
+
+    test('returns empty string and handles missing file gracefully', async () => {
+        const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            const filePath = path.join(tmpDir, 'nonexistent.txt');
+            const line = await readFirstLine(filePath);
+            expect(line).toBe('');
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+});
+
+describe('getChatInfo', () => {
+    let tmpDir;
+    let getChatInfo;
+
+    beforeAll(async () => {
+        const chatsModule = await import('../src/endpoints/chats.js');
+        getChatInfo = chatsModule.getChatInfo;
+    });
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-getchatinfo-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('returns chat info for a valid JSONL chat file', async () => {
+        const filePath = path.join(tmpDir, 'chat1.jsonl');
+        const header = JSON.stringify({ user_name: 'User', character_name: 'Assistant', create_date: '2026-01-01' });
+        const msg1 = JSON.stringify({ name: 'User', is_user: true, mes: 'Hello', send_date: '2026-01-01T00:00:00.000Z' });
+        const msg2 = JSON.stringify({ name: 'Assistant', is_user: false, mes: 'Hi there!', send_date: '2026-01-01T00:01:00.000Z' });
+        fs.writeFileSync(filePath, `${header}\n${msg1}\n${msg2}\n`);
+
+        const info = await getChatInfo(filePath);
+        expect(info.file_id).toBe('chat1');
+        expect(info.file_name).toBe('chat1.jsonl');
+        expect(info.chat_items).toBe(2);
+        expect(info.mes).toBe('Hi there!');
+        expect(info.last_mes).toBe('2026-01-01T00:01:00.000Z');
+        expect(info.match).toBe(true);
+    });
+
+    test('returns empty chat structure for a 0-byte file', async () => {
+        const filePath = path.join(tmpDir, 'empty.jsonl');
+        fs.writeFileSync(filePath, '');
+
+        const info = await getChatInfo(filePath);
+        expect(info.file_id).toBe('empty');
+        expect(info.chat_items).toBe(0);
+        expect(info.mes).toBe('[The chat is empty]');
+    });
+
+    test('handles whitespace-only file without hanging', async () => {
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            const filePath = path.join(tmpDir, 'whitespace.jsonl');
+            fs.writeFileSync(filePath, '   \n\n   \n');
+
+            const info = await getChatInfo(filePath);
+            expect(info).toEqual({});
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+
+    test('returns empty object for non-existent file', async () => {
+        const filePath = path.join(tmpDir, 'missing.jsonl');
+        const info = await getChatInfo(filePath);
+        expect(info).toEqual({});
+    });
+
+    test('returns empty object and logs warning for corrupted file without valid chat headers', async () => {
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            const filePath = path.join(tmpDir, 'corrupted.jsonl');
+            fs.writeFileSync(filePath, 'invalid non-json line\nanother corrupt line\n');
+
+            const info = await getChatInfo(filePath);
+            expect(info).toEqual({});
+            expect(warnSpy).toHaveBeenCalled();
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+
+    test('extracts metadata when withMetadata is true', async () => {
+        const filePath = path.join(tmpDir, 'meta.jsonl');
+        const header = JSON.stringify({
+            user_name: 'User',
+            character_name: 'Bot',
+            chat_metadata: { custom_key: 'custom_value' },
+        });
+        const msg = JSON.stringify({ name: 'Bot', mes: 'Hello', send_date: '2026-01-01' });
+        fs.writeFileSync(filePath, `${header}\n${msg}\n`);
+
+        const info = await getChatInfo(filePath, {}, true);
+        expect(info.chat_metadata).toEqual({ custom_key: 'custom_value' });
+    });
+
+    test('supports matcher filtering', async () => {
+        const filePath = path.join(tmpDir, 'search.jsonl');
+        const header = JSON.stringify({ user_name: 'User', character_name: 'Bot' });
+        const msg1 = JSON.stringify({ name: 'User', mes: 'banana' });
+        const msg2 = JSON.stringify({ name: 'Bot', mes: 'apple' });
+        fs.writeFileSync(filePath, `${header}\n${msg1}\n${msg2}\n`);
+
+        const matchFn = (msgs) => msgs.some(m => m.includes('banana'));
+        const info = await getChatInfo(filePath, {}, false, matchFn);
+        expect(info.match).toBe(true);
+
+        const noMatchFn = (msgs) => msgs.some(m => m.includes('orange'));
+        const noMatchInfo = await getChatInfo(filePath, {}, false, noMatchFn);
+        expect(noMatchInfo.match).toBe(false);
     });
 });

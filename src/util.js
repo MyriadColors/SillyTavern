@@ -1543,31 +1543,23 @@ export function tryDeleteFile(filePath) {
  * @param {string} filePath Path to the file
  * @returns {Promise<string>} The first line of the file
  */
-export function readFirstLine(filePath) {
-    const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
-    const rl = readline.createInterface({ input: stream });
-    return new Promise((resolve, reject) => {
-        let resolved = false;
-        rl.on('line', line => {
-            resolved = true;
-            rl.close();
-            stream.close();
-            resolve(line);
-        });
-
-        rl.on('error', error => {
-            resolved = true;
-            reject(error);
-        });
-
-        // Handle empty files
-        stream.on('end', () => {
-            if (!resolved) {
-                resolved = true;
-                resolve('');
-            }
-        });
-    });
+export async function readFirstLine(filePath) {
+    let stream;
+    let rl;
+    try {
+        stream = fs.createReadStream(filePath, { encoding: 'utf8' });
+        rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+        for await (const line of rl) {
+            return line;
+        }
+        return '';
+    } catch (error) {
+        console.error(`Error reading first line of ${filePath}:`, error.message);
+        return '';
+    } finally {
+        rl?.close();
+        stream?.destroy();
+    }
 }
 
 /**

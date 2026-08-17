@@ -357,29 +357,36 @@ async function checkChatIntegrity(filePath, integritySlug) {
  * @typedef {(textArray: string[]) => boolean} ChatMatchFunction
  */
 export async function getChatInfo(pathToFile, additionalData = {}, withMetadata = false, matcher = null) {
-    return new Promise(async (res) => {
-        const parsedPath = path.parse(pathToFile);
-        const stats = await fs.promises.stat(pathToFile);
-        const hasMatcher = (typeof matcher === 'function');
+    const parsedPath = path.parse(pathToFile);
+    let stats;
+    try {
+        stats = await fs.promises.stat(pathToFile);
+    } catch {
+        return {};
+    }
 
-        const chatData = {
-            match: false,
-            file_id: parsedPath.name,
-            file_name: parsedPath.base,
-            file_size: formatBytes(stats.size),
-            chat_items: 0,
-            mes: '[The chat is empty]',
-            last_mes: stats.mtimeMs,
-            ...additionalData,
-        };
+    const hasMatcher = (typeof matcher === 'function');
 
-        if (stats.size === 0) {
-            res(chatData);
-            return;
-        }
+    const chatData = {
+        match: false,
+        file_id: parsedPath.name,
+        file_name: parsedPath.base,
+        file_size: formatBytes(stats.size),
+        chat_items: 0,
+        mes: '[The chat is empty]',
+        last_mes: stats.mtimeMs,
+        ...additionalData,
+    };
 
-        const fileStream = fs.createReadStream(pathToFile);
-        const rl = readline.createInterface({
+    if (stats.size === 0) {
+        return chatData;
+    }
+
+    let fileStream;
+    let rl;
+    try {
+        fileStream = fs.createReadStream(pathToFile, { encoding: 'utf8' });
+        rl = readline.createInterface({
             input: fileStream,
             crlfDelay: Infinity,
         });
@@ -388,7 +395,8 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
         let itemCounter = 0;
         let hasAnyMatch = false;
         let matchBuffer = [];
-        rl.on('line', (line) => {
+
+        for await (const line of rl) {
             if (withMetadata && itemCounter === 0) {
                 const jsonData = tryParse(line);
                 if (jsonData && _.isObjectLike(jsonData.chat_metadata)) {
@@ -408,26 +416,30 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
             }
             itemCounter++;
             lastLine = line;
-        });
-        rl.on('close', () => {
-            rl.close();
+        }
 
-            if (lastLine) {
-                const jsonData = tryParse(lastLine);
-                if (jsonData && (jsonData.name || jsonData.character_name || jsonData.chat_metadata)) {
-                    chatData.chat_items = (itemCounter - 1);
-                    chatData.mes = jsonData.mes || '[The message is empty]';
-                    chatData.last_mes = jsonData.send_date || new Date(Math.round(stats.mtimeMs)).toISOString();
-                    chatData.match = hasMatcher ? hasAnyMatch : true;
-
-                    res(chatData);
-                } else {
-                    console.warn('Found an invalid or corrupted chat file:', pathToFile);
-                    res({});
-                }
+        if (lastLine) {
+            const jsonData = tryParse(lastLine);
+            if (jsonData && (jsonData.name || jsonData.character_name || jsonData.chat_metadata)) {
+                chatData.chat_items = (itemCounter - 1);
+                chatData.mes = jsonData.mes || '[The message is empty]';
+                chatData.last_mes = jsonData.send_date || new Date(Math.round(stats.mtimeMs)).toISOString();
+                chatData.match = hasMatcher ? hasAnyMatch : true;
+                return chatData;
+            } else {
+                console.warn('Found an invalid or corrupted chat file:', pathToFile);
+                return {};
             }
-        });
-    });
+        }
+
+        return chatData;
+    } catch (error) {
+        console.warn('Failed to read chat file info for:', pathToFile, error?.message);
+        return {};
+    } finally {
+        rl?.close();
+        fileStream?.destroy();
+    }
 }
 
 export const router = express.Router();

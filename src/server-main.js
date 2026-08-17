@@ -333,6 +333,9 @@ async function preSetupTasks() {
         console.error('Uncaught exception:', err);
         exitProcess();
     });
+    process.on('unhandledRejection', (reason, promise) => {
+        console.error('Unhandled Promise Rejection at:', promise, 'reason:', reason);
+    });
 
     // Add private request filter.
     const requestFilterOptions = {
@@ -452,6 +455,19 @@ async function postSetupTasks(result) {
  * Registers a not-found error response if a not-found error page exists. Should only be called after all other middlewares have been registered.
  */
 function apply404Middleware() {
+    app.use((err, req, res, next) => {
+        if (res.headersSent) {
+            return next(err);
+        }
+        console.error(`[Express Error] ${req.method} ${req.originalUrl}:`, err);
+        if (req.is('json') || req.path.startsWith('/api/') || req.xhr) {
+            return res.status(err.status || err.statusCode || 500).json({
+                error: err.message || 'Internal Server Error',
+            });
+        }
+        return res.status(err.status || err.statusCode || 500).send(err.message || 'Internal Server Error');
+    });
+
     const notFoundWebpage = safeReadFileSync(path.join(globalThis.DATA_ROOT, '_errors', 'url-not-found.html')) ?? '';
     app.use((req, res) => {
         res.status(404).send(notFoundWebpage);
