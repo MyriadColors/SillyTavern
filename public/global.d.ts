@@ -172,6 +172,7 @@ declare global {
     var pdfjsLib;
     var ePub;
     var quickReplyApi: QuickReplyApi;
+    var toastr: import('toastr').Toastr;
 
     var SillyTavern: {
         getContext(): typeof getContext;

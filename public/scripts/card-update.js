@@ -34,16 +34,22 @@ import { importTags } from './tags.js';
  */
 
 /**
+ * @typedef {object} ParsedCardResult
+ * @property {import('./char-data.js').CharacterCard} card
+ * @property {string} [avatarPreview]
+ */
+
+/**
  * Character Card Update and Conflict Resolution Manager.
  */
 export class CardUpdateManager {
     /**
      * Parses a character card file by sending it to the server parse endpoint.
      * @param {File} file Uploaded card file
-     * @returns {Promise<{ card: object, avatarPreview?: string }>}
+     * @returns {Promise<ParsedCardResult>}
      */
     static async parseCardFile(file) {
-        const ext = file.name.split('.').pop().toLowerCase();
+        const ext = file.name.split('.').pop()?.toLowerCase() || '';
         const formData = new FormData();
         formData.append('avatar', file);
         formData.append('file_type', ext);
@@ -65,12 +71,13 @@ export class CardUpdateManager {
 
     /**
      * Extracts normalized core definition text from a card for similarity comparison.
-     * @param {object} card Character card object
+     * @param {import('./char-data.js').CharacterCard} card Character card object
      * @returns {string}
      */
     static getCardCoreText(card) {
         if (!card || typeof card !== 'object') return '';
-        const data = card.data || card;
+        /** @type {import('./char-data.js').v2CharData | import('./char-data.js').v1CharData} */
+        const data = 'data' in card && card.data ? card.data : card;
         return [
             (data.description || '').trim(),
             (data.personality || '').trim(),
@@ -116,19 +123,21 @@ export class CardUpdateManager {
 
     /**
      * Extracts creator name from a card object.
-     * @param {object} card Character card object
+     * @param {import('./char-data.js').CharacterCard} card Character card object
      * @returns {string}
      */
     static getCardCreator(card) {
         if (!card || typeof card !== 'object') return '';
-        const data = card.data || card;
-        return String(data.creator || card.creator || '').trim();
+        /** @type {import('./char-data.js').v2CharData | import('./char-data.js').v1CharData} */
+        const data = 'data' in card && card.data ? card.data : card;
+        const creator = ('creator' in data && data.creator) || ('creator' in card && card.creator) || '';
+        return String(creator).trim();
     }
 
     /**
      * Searches for a matching character in the library using multi-factor identity checks.
      * Prevents false positive collisions for different cards that happen to share a common name.
-     * @param {object} cardData Parsed card object
+     * @param {import('./char-data.js').CharacterCard} cardData Parsed card object
      * @param {string} [fileName] Original file name
      * @returns {number} Index in characters[] or -1
      */
@@ -137,8 +146,9 @@ export class CardUpdateManager {
             return -1;
         }
 
-        const incomingData = cardData?.data || cardData || {};
-        const incomingName = String(incomingData.name || cardData?.name || '').trim().toLowerCase();
+        /** @type {import('./char-data.js').v2CharData | import('./char-data.js').v1CharData} */
+        const incomingData = 'data' in cardData && cardData.data ? cardData.data : cardData;
+        const incomingName = String(incomingData.name || ('name' in cardData && cardData.name) || '').trim().toLowerCase();
         const incomingCreator = this.getCardCreator(cardData).toLowerCase();
         const incomingText = this.getCardCoreText(cardData);
         const baseFileName = String(fileName).replace(/\.[^/.]+$/, '').trim().toLowerCase();
@@ -156,7 +166,7 @@ export class CardUpdateManager {
             if (chubIdMatch !== -1) return chubIdMatch;
         }
 
-        const incomingV3Id = incomingData.id || cardData?.id;
+        const incomingV3Id = incomingData.id || ('id' in cardData && cardData.id);
         if (incomingV3Id) {
             const v3Match = characters.findIndex(c => (c?.data?.id && c.data.id === incomingV3Id) || (c?.id && c.id === incomingV3Id));
             if (v3Match !== -1) return v3Match;
@@ -181,6 +191,7 @@ export class CardUpdateManager {
         }
 
         // 3. Match by Base Filename or Display Name guarded by Creator or Semantic Similarity
+        /** @type {number[]} */
         const candidateIndices = [];
         characters.forEach((c, idx) => {
             const cAvatarBase = String(c.avatar || '').replace(/\.[^/.]+$/, '').trim().toLowerCase();
@@ -219,16 +230,41 @@ export class CardUpdateManager {
 
     /**
      * Merges incoming card data into existing character structure according to user options.
-     * @param {object} existingChar Existing character object from library
-     * @param {object} newCard Parsed incoming card data (V2 format)
+     * @param {import('./char-data.js').v1CharData} existingChar Existing character object from library
+     * @param {import('./char-data.js').CharacterCard} newCard Parsed incoming card data (V2 format)
      * @param {CardUpdateOptions} options User-selected update options
-     * @returns {object} Merged character card data (V2 compliant)
+     * @returns {import('./char-data.js').v1CharData} Merged character card data (V2 compliant)
      */
     static mergeCardData(existingChar, newCard, options) {
+        /** @type {import('./char-data.js').v1CharData} */
         const merged = JSON.parse(JSON.stringify(existingChar));
-        if (!merged.data) merged.data = {};
+        if (!merged.data) {
+            merged.data = {
+                name: merged.name || '',
+                description: merged.description || '',
+                personality: merged.personality || '',
+                scenario: merged.scenario || '',
+                first_mes: merged.first_mes || '',
+                mes_example: merged.mes_example || '',
+                creator_notes: merged.creatorcomment || '',
+                system_prompt: '',
+                post_history_instructions: '',
+                tags: Array.isArray(merged.tags) ? [...merged.tags] : [],
+                creator: merged.creator || '',
+                character_version: merged.character_version || '1.0',
+                alternate_greetings: [],
+                extensions: {
+                    talkativeness: 0.5,
+                    fav: false,
+                    world: '',
+                    depth_prompt: { depth: 4, prompt: '', role: 'system' },
+                    regex_scripts: [],
+                },
+            };
+        }
 
-        const incomingData = newCard.data || newCard;
+        /** @type {import('./char-data.js').v2CharData | import('./char-data.js').v1CharData} */
+        const incomingData = 'data' in newCard && newCard.data ? newCard.data : newCard;
 
         // Core definitions
         if (options.updateDefinitions) {
@@ -326,11 +362,11 @@ export class CardUpdateManager {
                     merged.data.character_book = JSON.parse(JSON.stringify(incomingData.character_book));
                 } else {
                     const existingEntries = merged.data.character_book.entries;
-                    let maxId = existingEntries.reduce((max, e) => Math.max(max, Number(e.id) || 0), 0);
+                    let maxId = existingEntries.reduce((/** @type {number} */ max, /** @type {import('./char-data.js').v2DataWorldInfoEntry} */ e) => Math.max(max, Number(e.id) || 0), 0);
 
                     for (const inEntry of incomingData.character_book.entries) {
                         const inKeys = Array.isArray(inEntry.keys) ? inEntry.keys.join(',') : '';
-                        const matchIndex = existingEntries.findIndex(e => {
+                        const matchIndex = existingEntries.findIndex((/** @type {import('./char-data.js').v2DataWorldInfoEntry} */ e) => {
                             if (inEntry.comment && e.comment && inEntry.comment === e.comment) return true;
                             if (inKeys && Array.isArray(e.keys) && e.keys.join(',') === inKeys) return true;
                             return false;
@@ -417,9 +453,9 @@ export class CardUpdateManager {
     /**
      * Displays the conflict resolution dialog when an imported character already exists.
      * @param {object} params
-     * @param {object} params.existingChar Existing character from library
+     * @param {import('./char-data.js').v1CharData} params.existingChar Existing character from library
      * @param {File} params.file Uploaded file
-     * @param {object} params.newCard Parsed incoming card data
+     * @param {import('./char-data.js').CharacterCard} params.newCard Parsed incoming card data
      * @param {string} [params.avatarPreview] Data URL or preview
      * @returns {Promise<'update'|'duplicate'|'cancel'>}
      */
@@ -480,7 +516,7 @@ export class CardUpdateManager {
      * Displays the main Card Update & Diff/Merge Wizard modal.
      * @param {object} params
      * @param {number} params.existingCharIndex Index in characters[]
-     * @param {object} params.newCardData Parsed card object
+     * @param {import('./char-data.js').CharacterCard} params.newCardData Parsed card object
      * @param {File} [params.avatarFile] Raw uploaded file (if avatar is to be updated)
      * @param {string} [params.avatarPreview] Image data URL
      * @returns {Promise<boolean>} True if update succeeded
@@ -492,8 +528,9 @@ export class CardUpdateManager {
             return false;
         }
 
-        const incomingData = newCardData.data || newCardData;
-        const hasNewAvatar = !!avatarPreview || (avatarFile && ['png', 'charx', 'byaf'].includes(avatarFile.name.split('.').pop().toLowerCase()));
+        /** @type {import('./char-data.js').v2CharData | import('./char-data.js').v1CharData} */
+        const incomingData = 'data' in newCardData && newCardData.data ? newCardData.data : newCardData;
+        const hasNewAvatar = !!avatarPreview || (avatarFile && ['png', 'charx', 'byaf'].includes(avatarFile.name.split('.').pop()?.toLowerCase() || ''));
 
         const currentAvatarUrl = existingChar.avatar && existingChar.avatar !== 'none'
             ? getThumbnailUrl('avatar', existingChar.avatar)
@@ -544,12 +581,12 @@ export class CardUpdateManager {
             updateAvatar: $template.find('#card_update_opt_avatar').is(':checked'),
             updateDefinitions: $template.find('#card_update_opt_definitions').is(':checked'),
             updateFirstMes: $template.find('#card_update_opt_first_mes').is(':checked'),
-            alternateGreetingsMode: String($template.find('#card_update_opt_alt_greetings').val()),
+            alternateGreetingsMode: /** @type {'replace'|'merge'|'keep'} */ (String($template.find('#card_update_opt_alt_greetings').val())),
             updateMesExample: $template.find('#card_update_opt_mes_example').is(':checked'),
             updateSystemPrompt: $template.find('#card_update_opt_system_prompt').is(':checked'),
-            characterBookMode: String($template.find('#card_update_opt_character_book').val()),
-            regexScriptsMode: String($template.find('#card_update_opt_regex').val()),
-            tagsMode: String($template.find('#card_update_opt_tags').val()),
+            characterBookMode: /** @type {'replace'|'merge'|'keep'} */ (String($template.find('#card_update_opt_character_book').val())),
+            regexScriptsMode: /** @type {'replace'|'merge'|'keep'} */ (String($template.find('#card_update_opt_regex').val())),
+            tagsMode: /** @type {'replace'|'merge'|'keep'} */ (String($template.find('#card_update_opt_tags').val())),
             preserveSettings: $template.find('#card_update_opt_preserve_settings').is(':checked'),
         };
 
@@ -565,7 +602,7 @@ export class CardUpdateManager {
      * Executes the character update request against the backend.
      * @param {object} params
      * @param {number} params.existingCharIndex
-     * @param {object} params.newCardData
+     * @param {import('./char-data.js').CharacterCard} params.newCardData
      * @param {File|null} [params.avatarFile]
      * @param {CardUpdateOptions} params.options
      * @returns {Promise<boolean>}
@@ -619,7 +656,7 @@ export class CardUpdateManager {
             });
 
             // If this is the currently selected character and chat has only 1 message, regenerate greeting if updated
-            if (this_chid === existingCharIndex && options.updateFirstMes) {
+            if (Number(this_chid) === existingCharIndex && options.updateFirstMes) {
                 const message = getFirstMessage();
                 const isPristineChat = chat.length === 1 && !chat[0].is_user && !chat[0].is_system && !chat_metadata.tainted;
                 if (isPristineChat && message.mes) {
@@ -637,7 +674,8 @@ export class CardUpdateManager {
             return true;
         } catch (error) {
             console.error('Error executing card update:', error);
-            toastr.error(error.message || t`Failed to update character card`);
+            const errorMessage = error instanceof Error ? error.message : (typeof error === 'string' ? error : undefined);
+            toastr.error(errorMessage || t`Failed to update character card`);
             return false;
         }
     }

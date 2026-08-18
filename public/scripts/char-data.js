@@ -50,6 +50,7 @@
 /**
  * @typedef {object} v2CharData
  * @property {string} name - The character's name.
+ * @property {string} [id] - The character's UUID or ID.
  * @property {string} description - A brief description of the character.
  * @property {string} character_version - The character's data version.
  * @property {string} personality - A short summary of the character's personality traits.
@@ -76,10 +77,11 @@
  * @property {"system" | "user" | "assistant"} depth_prompt.role - The role the character takes on during the prompted interaction (system, user, or assistant).
  * @property {RegexScriptData[]} regex_scripts - Custom regex scripts for the character.
  * // Non-standard extensions added by external tools
+ * @property {string} [character_id] - The unique identifier assigned to the character.
  * @property {string} [pygmalion_id] - The unique identifier assigned to the character by the Pygmalion.chat.
  * @property {string} [github_repo] - The gitHub repository associated with the character.
  * @property {string} [source_url] - The source URL associated with the character.
- * @property {{full_path: string}} [chub] - The Chub-specific data associated with the character.
+ * @property {{full_path?: string, id?: number|string}} [chub] - The Chub-specific data associated with the character.
  * @property {{source: string[]}} [risuai] - The RisuAI-specific data associated with the character.
  * @property {{positive: string, negative: string}} [sd_character_prompt] - SD-specific data associated with the character.
  */
@@ -104,12 +106,17 @@
 /**
  * @typedef {object} v1CharData
  * @property {string} name - the name of the character
+ * @property {string} [id] - the character's UUID or ID
+ * @property {string} [character_version] - the character's data version
+ * @property {string} [creator] - the character's creator
  * @property {string} description - the description of the character
  * @property {string} personality - a short personality description of the character
  * @property {string} scenario - a scenario description of the character
  * @property {string} first_mes - the first message in the conversation
  * @property {string} mes_example - the example message in the conversation
  * @property {string} creatorcomment - creator's notes of the character
+ * @property {string} [system_prompt] - system prompt
+ * @property {string} [post_history_instructions] - post history instructions
  * @property {string[]} tags - the tags of the character
  * @property {number} talkativeness - talkativeness
  * @property {boolean|string} fav - fav
@@ -121,4 +128,19 @@
  * @property {string} json_data - the full raw JSON data of the character
  * @property {boolean?} shallow - if the data is shallow (lazy-loaded)
  */
+
+/**
+ * Character Card V2 format wrapper (CCv2 standard).
+ * @typedef {object} TavernCardV2
+ * @property {'chara_card_v2'|string} spec - The card format specification identifier.
+ * @property {'2.0'|string} spec_version - The specification version.
+ * @property {v2CharData} data - The core character card payload.
+ */
+
+/**
+ * Union type representing any valid character card representation:
+ * V2 card wrapper, SillyTavern in-memory character (v1CharData), or raw V2 data object.
+ * @typedef {TavernCardV2 | v1CharData | v2CharData} CharacterCard
+ */
+
 export default 0;// now this file is a module
