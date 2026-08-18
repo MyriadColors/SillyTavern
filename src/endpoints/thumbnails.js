@@ -142,7 +142,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
             }
         }
         if (!fs.existsSync(pathToOriginalFile)) {
-            console.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
+            console.warn(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
             return { path: null, aspectRatio: null, resolution: null };
         }
 
@@ -287,6 +287,11 @@ publicRouter.get('/', async function (request, response) {
 
         // Try to generate thumbnail if it doesn't exist
         if (!fs.existsSync(pathToCachedFile)) {
+            const originalFolder = getOriginalFolder(request.user.directories, type);
+            const pathToOriginalFile = path.resolve(path.join(originalFolder, file));
+            if (!fs.existsSync(pathToOriginalFile)) {
+                return response.sendStatus(404);
+            }
             const thumbResult = await generateThumbnail(request.user.directories, type, file, false);
             // If generation failed (path is null), serve the original file
             if (!thumbResult.path) {

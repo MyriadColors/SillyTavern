@@ -1,9 +1,11 @@
 import {
-    getOneCharacter,
+    characters,
+    this_chid,
+    setCharacterId,
+    getCharacters,
     getRequestHeaders,
     getThumbnailUrl,
     default_avatar,
-    printCharacters,
     saveSettingsDebounced,
 } from '../script.js';
 import { renderTemplateAsync } from './templates.js';
@@ -12,6 +14,7 @@ import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { tag_map } from './tags.js';
 import { groups } from './group-chats.js';
+import { eventSource, event_types } from './events.js';
 
 const SETTINGS_KEY = 'st_card_deduper_settings';
 const IGNORED_PAIRS_KEY = 'st_card_deduper_ignored_pairs';
@@ -77,14 +80,7 @@ export class CardDeduperManager {
      */
     static async openDeduperDialog() {
         const templateHtml = await renderTemplateAsync('cardDeduperPopup');
-        const popup = new Popup(templateHtml, POPUP_TYPE.TEXT, '', {
-            okButton: false,
-            cancelButton: t`Close`,
-            classes: ['wide_dialogue_popup'],
-        });
-
-        const dialog = await popup.show();
-        const dom = dialog.dialog;
+        const dom = $(templateHtml);
 
         let currentClusters = [];
         let currentSettings = this.getSettings();
@@ -258,7 +254,7 @@ export class CardDeduperManager {
                                     <strong style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${card.name}</strong>
                                     ${card.character_version ? `<span class="tag" style="font-size: 0.7em; padding: 1px 4px;">v${card.character_version}</span>` : ''}
                                     ${card.creator ? `<span class="notes" style="font-size: 0.75em; max-width: 100px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${card.creator}"><i class="fa-solid fa-user-pen"></i> ${card.creator}</span>` : ''}
-                                    ${isPrimary ? `<span class="tag" style="font-size: 0.7em; padding: 1px 4px; background-color: var(--green);">${t`Primary`}</span>` : ''}
+                                    ${isPrimary ? `<span class="tag card-deduper-primary-tag" style="font-size: 0.7em; padding: 1px 4px; background-color: var(--green);">${t`Primary`}</span>` : ''}
                                 </div>
                                 <div class="notes" style="font-size: 0.8em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${card.avatar}</div>
                                 <div class="notes" style="font-size: 0.75em;">
@@ -271,9 +267,9 @@ export class CardDeduperManager {
                     cardItem.find(`input[name="primary_card_${clusterIdx}"]`).on('change', function () {
                         cluster.recommendedPrimary = $(this).val();
                         cardsGrid.find('.card-deduper-card-item').removeClass('is-primary-card');
-                        cardsGrid.find('.tag:contains("Primary")').remove();
+                        cardsGrid.find('.card-deduper-primary-tag').remove();
                         cardItem.addClass('is-primary-card');
-                        cardItem.find('strong').after(`<span class="tag" style="font-size: 0.7em; padding: 1px 4px; background-color: var(--green);">${t`Primary`}</span>`);
+                        cardItem.find('strong').after(`<span class="tag card-deduper-primary-tag" style="font-size: 0.7em; padding: 1px 4px; background-color: var(--green);">${t`Primary`}</span>`);
                     });
 
                     cardsGrid.append(cardItem);
@@ -392,6 +388,15 @@ export class CardDeduperManager {
 
         // Initial scan
         runScan();
+
+        const popup = new Popup(dom, POPUP_TYPE.TEXT, '', {
+            okButton: false,
+            cancelButton: t`Close`,
+            wide: true,
+            large: true,
+            allowVerticalScrolling: true,
+        });
+        await popup.show();
     }
 
     /**
@@ -479,10 +484,27 @@ export class CardDeduperManager {
                 }
             });
 
+            // Clean up accountStorage and emit CHARACTER_DELETED for duplicate avatars
+            duplicateAvatars.forEach(dup => {
+                accountStorage.removeItem(`AlertWI_${dup}`);
+                accountStorage.removeItem(`AlertRegex_${dup}`);
+                accountStorage.removeItem(`mediaWarningShown:${dup}`);
+                const dupIndex = characters.findIndex(c => c.avatar === dup);
+                const dupChar = dupIndex !== -1 ? characters[dupIndex] : { avatar: dup };
+                eventSource.emit(event_types.CHARACTER_DELETED, { id: dupIndex, character: dupChar });
+            });
+
+            // If active character was one of the consolidated duplicates, switch to primary
+            if (this_chid !== undefined && characters[this_chid] && duplicateAvatars.includes(characters[this_chid].avatar)) {
+                const primaryIndex = characters.findIndex(c => c.avatar === primaryAvatar);
+                if (primaryIndex !== -1) {
+                    setCharacterId(primaryIndex);
+                }
+            }
+
             // Refresh character library
             await fetch(getThumbnailUrl('avatar', primaryAvatar), { cache: 'reload' }).catch(() => {});
-            await getOneCharacter(primaryAvatar);
-            await printCharacters(true);
+            await getCharacters();
 
             if (showToast) {
                 toastr.success(t`Consolidated ${result.duplicatesProcessed} duplicate(s) into ${primaryAvatar} (${result.chatsMigrated} chats migrated)`);
@@ -509,7 +531,7 @@ export class CardDeduperManager {
                 throw new Error(err.message || response.statusText);
             }
 
-            await printCharacters(true);
+            await getCharacters();
             toastr.success(t`Rollback completed! Character library, chats, and groups restored.`);
         } catch (err) {
             console.error('Rollback failed:', err);

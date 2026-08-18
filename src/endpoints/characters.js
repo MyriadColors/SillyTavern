@@ -2629,6 +2629,16 @@ router.post('/dedupe/consolidate', async function (request, response) {
             }
         }
 
+        // Invalidate in-memory and disk caches for modified and removed characters
+        for (const key of memoryCache.keys()) {
+            if (key.startsWith(primaryPath) || validDupAvatars.some(dup => key.startsWith(path.join(charactersDir, dup)))) {
+                memoryCache.delete(key);
+            }
+        }
+        if (useDiskCache) {
+            diskCache.syncQueue.add(request.user.profile.handle);
+        }
+
         return response.json({
             success: true,
             backupId,

@@ -10,15 +10,20 @@ try {
 jest.unstable_mockModule('../public/script.js', () => ({
     characters: [],
     this_chid: undefined,
+    setCharacterId: jest.fn(),
     getOneCharacter: jest.fn(),
-    eventSource: { emit: jest.fn() },
-    event_types: { CHARACTER_EDITED: 'character_edited', CHARACTER_DELETED: 'character_deleted' },
+    getCharacters: jest.fn(),
     getRequestHeaders: jest.fn(() => ({})),
     getThumbnailUrl: jest.fn((_type, file) => `/thumbnail/${file}`),
     toastr: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() },
     default_avatar: 'default.png',
     printCharacters: jest.fn(),
     saveSettingsDebounced: jest.fn(),
+}));
+
+jest.unstable_mockModule('../public/scripts/events.js', () => ({
+    eventSource: { emit: jest.fn() },
+    event_types: { CHARACTER_EDITED: 'character_edited', CHARACTER_DELETED: 'character_deleted' },
 }));
 
 jest.unstable_mockModule('../public/scripts/templates.js', () => ({
@@ -222,3 +227,36 @@ describe('Guarded Deduplication Matching Logic', () => {
         expect(simScore).toBeGreaterThan(0.7);
     });
 });
+
+describe('CardDeduperManager.executeConsolidation', () => {
+    test('calls consolidation endpoint and handles state cleanup', async () => {
+        global.fetch = jest.fn((url) => {
+            if (url === '/api/characters/dedupe/consolidate') {
+                return Promise.resolve({
+                    ok: true,
+                    json: () => Promise.resolve({
+                        success: true,
+                        backupId: 'dedupe_test',
+                        primaryAvatar: 'Alice.png',
+                        duplicatesProcessed: 1,
+                        chatsMigrated: 2,
+                    }),
+                });
+            }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+        });
+
+        const cluster = {
+            name: 'Alice',
+            recommendedPrimary: 'Alice.png',
+            cards: [
+                { avatar: 'Alice.png', name: 'Alice' },
+                { avatar: 'Alice_dup.png', name: 'Alice (Copy)' },
+            ],
+        };
+
+        await CardDeduperManager.executeConsolidation(cluster, { safeMode: 'trash' }, false);
+        expect(global.fetch).toHaveBeenCalledWith('/api/characters/dedupe/consolidate', expect.any(Object));
+    });
+});
+
