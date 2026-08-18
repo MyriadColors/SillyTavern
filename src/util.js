@@ -25,8 +25,10 @@ import { isFirefox } from './express-common.js';
 
 /**
  * Parsed config object.
+ * @type {Record<string, unknown>|null}
  */
 let CACHED_CONFIG = null;
+/** @type {string|null} */
 let CONFIG_PATH = null;
 
 /**
@@ -50,7 +52,7 @@ export function setConfigFilePath(configFilePath) {
 
 /**
  * Returns the config object from the config.yaml file.
- * @returns {object} Config object
+ * @returns {Record<string, unknown>} Config object
  */
 export function getConfig() {
     if (CONFIG_PATH === null) {
@@ -72,8 +74,9 @@ export function getConfig() {
         CACHED_CONFIG = config;
         return config;
     } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(color.red('FATAL: Failed to read config.yaml. Please check the file for syntax errors.'));
-        console.error(error.message);
+        console.error(errorMessage);
         process.exit(1);
     }
 }
@@ -88,9 +91,9 @@ export function getConfig() {
 export function getConfigValue(key, defaultValue = null, typeConverter = null) {
     function _getValue() {
         const envKey = keyToEnv(key);
-        if (envKey in process.env) {
+        const envValue = process.env[envKey];
+        if (envValue !== undefined) {
             const needsJsonParse = defaultValue && typeof defaultValue === 'object';
-            const envValue = process.env[envKey];
             return needsJsonParse ? (tryParse(envValue) ?? defaultValue) : envValue;
         }
         const config = getConfig();
@@ -208,22 +211,23 @@ export async function extractFileFromZipBuffer(archiveBuffer, fileExtension) {
     return await new Promise((resolve) => {
         try {
             yauzl.fromBuffer(Buffer.from(archiveBuffer), { lazyEntries: true }, (err, zipfile) => {
-                if (err) {
-                    console.warn(`Error opening ZIP file: ${err.message}`);
+                if (err || !zipfile) {
+                    console.warn(`Error opening ZIP file: ${err ? err.message : 'Invalid zip'}`);
                     return resolve(null);
                 }
 
                 zipfile.readEntry();
 
-                zipfile.on('entry', (entry) => {
+                zipfile.on('entry', (/** @type {import('yauzl').Entry} */ entry) => {
                     if (entry.fileName.endsWith(fileExtension) && !entry.fileName.startsWith('__MACOSX')) {
                         zipfile.openReadStream(entry, (err, readStream) => {
-                            if (err) {
-                                console.warn(`Error opening read stream: ${err.message}`);
+                            if (err || !readStream) {
+                                console.warn(`Error opening read stream: ${err ? err.message : 'Invalid stream'}`);
                                 return zipfile.readEntry();
                             } else {
+                                /** @type {Buffer[]} */
                                 const chunks = [];
-                                readStream.on('data', (chunk) => {
+                                readStream.on('data', (/** @type {Buffer} */ chunk) => {
                                     chunks.push(chunk);
                                 });
 
@@ -233,7 +237,7 @@ export async function extractFileFromZipBuffer(archiveBuffer, fileExtension) {
                                     zipfile.readEntry(); // Continue to the next entry
                                 });
 
-                                readStream.on('error', (err) => {
+                                readStream.on('error', (/** @type {Error} */ err) => {
                                     console.warn(`Error reading stream: ${err.message}`);
                                     zipfile.readEntry();
                                 });
@@ -244,7 +248,7 @@ export async function extractFileFromZipBuffer(archiveBuffer, fileExtension) {
                     }
                 });
 
-                zipfile.on('error', (err) => {
+                zipfile.on('error', (/** @type {Error} */ err) => {
                     console.warn('ZIP processing error', err);
                     resolve(null);
                 });
@@ -331,20 +335,21 @@ export async function extractFilesFromZipBuffer(archiveBuffer, fileNames) {
 
                 zipfile.readEntry();
 
-                zipfile.on('entry', (entry) => {
+                zipfile.on('entry', (/** @type {import('yauzl').Entry} */ entry) => {
                     const normalizedEntry = normalizeZipEntryPath(entry.fileName);
                     if (!normalizedEntry || !targets.has(normalizedEntry)) {
                         return zipfile.readEntry();
                     }
 
                     zipfile.openReadStream(entry, (streamErr, readStream) => {
-                        if (streamErr) {
-                            console.warn(`Error opening read stream: ${streamErr.message}`);
+                        if (streamErr || !readStream) {
+                            console.warn(`Error opening read stream: ${streamErr ? streamErr.message : 'Invalid stream'}`);
                             return zipfile.readEntry();
                         }
 
+                        /** @type {Buffer[]} */
                         const chunks = [];
-                        readStream.on('data', (chunk) => {
+                        readStream.on('data', (/** @type {Buffer} */ chunk) => {
                             chunks.push(chunk);
                         });
 
@@ -359,14 +364,14 @@ export async function extractFilesFromZipBuffer(archiveBuffer, fileNames) {
                             }
                         });
 
-                        readStream.on('error', (streamError) => {
+                        readStream.on('error', (/** @type {Error} */ streamError) => {
                             console.warn(`Error reading stream: ${streamError.message}`);
                             zipfile.readEntry();
                         });
                     });
                 });
 
-                zipfile.on('error', (zipError) => {
+                zipfile.on('error', (/** @type {Error} */ zipError) => {
                     console.warn('ZIP processing error', zipError);
                     finalize();
                 });
@@ -419,22 +424,24 @@ export async function getImageBuffers(zipFilePath) {
             return;
         }
 
+        /** @type {[string, Buffer][]} */
         const imageBuffers = [];
 
         yauzl.open(zipFilePath, { lazyEntries: true }, (err, zipfile) => {
-            if (err) {
-                reject(err);
+            if (err || !zipfile) {
+                reject(err || new Error('Invalid zip file'));
             } else {
                 zipfile.readEntry();
-                zipfile.on('entry', (entry) => {
+                zipfile.on('entry', (/** @type {import('yauzl').Entry} */ entry) => {
                     const mimeType = mime.lookup(entry.fileName);
                     if (mimeType && mimeType.startsWith('image/') && !entry.fileName.startsWith('__MACOSX')) {
                         zipfile.openReadStream(entry, (err, readStream) => {
-                            if (err) {
-                                reject(err);
+                            if (err || !readStream) {
+                                reject(err || new Error('Invalid stream'));
                             } else {
+                                /** @type {Buffer[]} */
                                 const chunks = [];
-                                readStream.on('data', (chunk) => {
+                                readStream.on('data', (/** @type {Buffer} */ chunk) => {
                                     chunks.push(chunk);
                                 });
 
@@ -453,7 +460,7 @@ export async function getImageBuffers(zipFilePath) {
                     resolve(imageBuffers);
                 });
 
-                zipfile.on('error', (err) => {
+                zipfile.on('error', (/** @type {Error} */ err) => {
                     reject(err);
                 });
             }
@@ -463,14 +470,15 @@ export async function getImageBuffers(zipFilePath) {
 
 /**
  * Gets all chunks of data from the given readable stream.
- * @param {any} readableStream Readable stream to read from
+ * @param {import('node:stream').Readable} readableStream Readable stream to read from
  * @returns {Promise<Buffer[]>} Array of chunks
  */
 export async function readAllChunks(readableStream) {
     return new Promise((resolve, reject) => {
         // Consume the readable stream
+        /** @type {Buffer[]} */
         const chunks = [];
-        readableStream.on('data', (chunk) => {
+        readableStream.on('data', (/** @type {Buffer} */ chunk) => {
             chunks.push(chunk);
         });
 
@@ -479,17 +487,30 @@ export async function readAllChunks(readableStream) {
             resolve(chunks);
         });
 
-        readableStream.on('error', (error) => {
+        readableStream.on('error', (/** @type {Error} */ error) => {
             console.error('Error while reading the stream:', error);
-            reject();
+            reject(error);
         });
     });
 }
 
+/**
+ * Checks if the item is a non-null, non-array object.
+ * @param {unknown} item Item to check
+ * @returns {item is Record<string, unknown>} True if item is an object
+ */
 function isObject(item) {
-    return (item && typeof item === 'object' && !Array.isArray(item));
+    return Boolean(item && typeof item === 'object' && !Array.isArray(item));
 }
 
+/**
+ * Deeply merges two objects.
+ * @template {Record<string, unknown>} T
+ * @template {Record<string, unknown>} S
+ * @param {T} target Target object
+ * @param {S} source Source object to merge from
+ * @returns {T & S} Merged object
+ */
 export function deepMerge(target, source) {
     let output = Object.assign({}, target);
     if (isObject(target) && isObject(source)) {
@@ -498,7 +519,7 @@ export function deepMerge(target, source) {
                 if (!(key in target)) {
                     Object.assign(output, { [key]: source[key] });
                 } else {
-                    output[key] = deepMerge(target[key], source[key]);
+                    output[key] = deepMerge(/** @type {Record<string, unknown>} */ (target[key]), /** @type {Record<string, unknown>} */ (source[key]));
                 }
             } else {
                 Object.assign(output, { [key]: source[key] });
@@ -538,6 +559,7 @@ export function uuidv4() {
  */
 export function humanizedDateTime(timestamp = Date.now()) {
     const date = new Date(timestamp);
+    /** @type {Record<string, number|string>} */
     const dt = {
         year: date.getFullYear(),
         month: date.getMonth() + 1,
@@ -554,11 +576,18 @@ export function humanizedDateTime(timestamp = Date.now()) {
     return `${dt.year}-${dt.month}-${dt.day}@${dt.hour}h${dt.minute}m${dt.second}s${dt.millisecond}ms`;
 }
 
-export function tryParse(str) {
+/**
+ * Safely parses a JSON string, returning a fallback value on failure.
+ * @template T
+ * @param {string} str JSON string to parse
+ * @param {T} [fallback=undefined] Fallback value if parsing fails
+ * @returns {T|any} Parsed JSON or fallback
+ */
+export function tryParse(str, fallback = undefined) {
     try {
         return JSON.parse(str);
     } catch {
-        return undefined;
+        return fallback;
     }
 }
 
@@ -696,7 +725,8 @@ export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_T
                 try {
                     mtimes.set(file, fs.statSync(path.join(directoryPath, file)).mtimeMs);
                 } catch (err) {
-                    if (err?.code !== 'ENOENT') {
+                    const sysError = /** @type {NodeJS.ErrnoException} */ (err);
+                    if (sysError?.code !== 'ENOENT') {
                         throw err;
                     }
                     mtimes.set(file, 0);
@@ -747,7 +777,7 @@ export async function forwardFetchResponse(from, to) {
     }
 
     if (from.body && to.socket) {
-        from.body.pipe(to);
+        from.body.pipe(/** @type {NodeJS.WritableStream} */ (to));
 
         to.socket.on('close', function () {
             if (from.body instanceof Readable) from.body.destroy(); // Close the remote stream
@@ -851,7 +881,7 @@ export function mergeObjectWithYaml(obj, yamlString) {
 
 /**
  * Removes keys from the object by YAML-serialized array.
- * @param {object} obj Object
+ * @param {Record<string, unknown>} obj Object
  * @param {string} yamlString YAML-serialized array
  * @returns {void} Nothing
  */
@@ -865,9 +895,11 @@ export function excludeKeysByYaml(obj, yamlString) {
 
         if (Array.isArray(parsedObject)) {
             parsedObject.forEach(key => {
-                delete obj[key];
+                if (typeof key === 'string') {
+                    delete obj[key];
+                }
             });
-        } else if (typeof parsedObject === 'object') {
+        } else if (parsedObject && typeof parsedObject === 'object') {
             Object.keys(parsedObject).forEach(key => {
                 delete obj[key];
             });
@@ -1140,6 +1172,7 @@ export class MemoryLimitedMap {
         this.maxMemory = bytes.parse(cacheCapacity) ?? 0;
         this.currentMemory = 0;
         this.map = new Map();
+        /** @type {string[]} */
         this.queue = [];
     }
 
@@ -1190,10 +1223,12 @@ export class MemoryLimitedMap {
         // Evict oldest entries until there's enough space
         while (this.currentMemory + newValueSize > this.maxMemory && this.queue.length > 0) {
             const oldestKey = this.queue.shift();
-            const oldestValue = this.map.get(oldestKey);
-            const oldestValueSize = MemoryLimitedMap.estimateStringSize(oldestValue);
-            this.map.delete(oldestKey);
-            this.currentMemory -= oldestValueSize;
+            if (oldestKey !== undefined) {
+                const oldestValue = this.map.get(oldestKey);
+                const oldestValueSize = MemoryLimitedMap.estimateStringSize(oldestValue);
+                this.map.delete(oldestKey);
+                this.currentMemory -= oldestValueSize;
+            }
         }
 
         // After eviction, check again if there's enough space
@@ -1226,30 +1261,27 @@ export class MemoryLimitedMap {
     }
 
     /**
-     * Deletes the key-value pair associated with the given key.
+     * Removes the key and its value from the map.
      * @param {string} key
-     * @returns {boolean} - Returns true if the key was found and deleted, else false.
+     * @returns {boolean}
      */
     delete(key) {
-        if (!this.map.has(key)) {
-            return false;
+        if (this.map.has(key)) {
+            const value = this.map.get(key);
+            const valueSize = MemoryLimitedMap.estimateStringSize(value);
+            this.map.delete(key);
+            this.currentMemory -= valueSize;
+            const index = this.queue.indexOf(key);
+            if (index > -1) {
+                this.queue.splice(index, 1);
+            }
+            return true;
         }
-        const value = this.map.get(key);
-        const valueSize = MemoryLimitedMap.estimateStringSize(value);
-        this.map.delete(key);
-        this.currentMemory -= valueSize;
-
-        // Remove the key from the queue
-        const index = this.queue.indexOf(key);
-        if (index > -1) {
-            this.queue.splice(index, 1);
-        }
-
-        return true;
+        return false;
     }
 
     /**
-     * Clears all entries from the map.
+     * Clears all key-value pairs from the map.
      */
     clear() {
         this.map.clear();
@@ -1274,7 +1306,7 @@ export class MemoryLimitedMap {
     }
 
     /**
-     * Returns an iterator over the keys in the map.
+     * Returns an iterable of keys in the map.
      * @returns {IterableIterator<string>}
      */
     keys() {
@@ -1282,7 +1314,7 @@ export class MemoryLimitedMap {
     }
 
     /**
-     * Returns an iterator over the values in the map.
+     * Returns an iterable of values in the map.
      * @returns {IterableIterator<string>}
      */
     values() {
@@ -1301,7 +1333,7 @@ export class MemoryLimitedMap {
 
     /**
      * Makes the MemoryLimitedMap iterable.
-     * @returns {Iterator} - Iterator over [key, value] pairs.
+     * @returns {IterableIterator<[string, string]>} - Iterator over [key, value] pairs.
      */
     [Symbol.iterator]() {
         return this.map[Symbol.iterator]();
@@ -1309,14 +1341,48 @@ export class MemoryLimitedMap {
 }
 
 /**
- * A 'safe' version of `fs.readFileSync()`. Returns the contents of a file if it exists, falling back to a default value if not.
+ * A 'safe' version of `fs.readFileSync()`. Returns the contents of a file if it exists and can be read, falling back to a default value if not.
  * @param {string} filePath Path of the file to be read.
  * @param {Parameters<typeof fs.readFileSync>[1]} options Options object to pass through to `fs.readFileSync()` (default: `{ encoding: 'utf-8' }`).
- * @returns The contents at `filePath` if it exists, or `null` if not.
+ * @returns {string|Buffer|null} The contents at `filePath` if it exists, or `null` if not.
  */
 export function safeReadFileSync(filePath, options = { encoding: 'utf-8' }) {
-    if (fs.existsSync(filePath)) return fs.readFileSync(filePath, options);
+    try {
+        if (fs.existsSync(filePath)) return fs.readFileSync(filePath, options);
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`safeReadFileSync failed for "${filePath}":`, errorMessage);
+    }
     return null;
+}
+
+/**
+ * Safely reads and parses a JSON file synchronously. Returns fallback if missing or invalid.
+ * @template [T=unknown]
+ * @param {string} filePath Path to the JSON file
+ * @param {T|null} [fallback=null] Fallback value if reading or parsing fails
+ * @returns {T|null} Parsed JSON data or fallback
+ */
+export function safeReadJsonSync(filePath, fallback = null) {
+    const content = safeReadFileSync(filePath, { encoding: 'utf-8' });
+    if (!content) return fallback;
+    return tryParse(String(content), fallback);
+}
+
+/**
+ * Safely reads and parses a JSON file asynchronously. Returns fallback if missing or invalid.
+ * @template [T=unknown]
+ * @param {string} filePath Path to the JSON file
+ * @param {T|null} [fallback=null] Fallback value if reading or parsing fails
+ * @returns {Promise<T|null>} Parsed JSON data or fallback
+ */
+export async function safeReadJson(filePath, fallback = null) {
+    try {
+        const content = await fs.promises.readFile(filePath, 'utf8');
+        return tryParse(content, fallback);
+    } catch {
+        return fallback;
+    }
 }
 
 /**
@@ -1334,7 +1400,7 @@ export function setWindowTitle(title) {
 /**
  * Parses a JSON string and applies a mutation function to the parsed object.
  * @param {string} jsonString JSON string to parse
- * @param {function(any): void} mutation Mutation function to apply to the parsed JSON object
+ * @param {(json: Record<string, unknown>) => void} mutation Mutation function to apply to the parsed JSON object
  * @returns {string} Mutated JSON string
  */
 export function mutateJsonString(jsonString, mutation) {
@@ -1438,21 +1504,28 @@ export function getRequestURL(request) {
 /**
  * Flattens and simplifies a JSON schema to be compatible with the strict requirements
  * of Google's Generative AI API.
- * @param {object} schema The JSON schema to process.
+ * @param {unknown} schema The JSON schema to process.
  * @param {string} api The API source.
- * @returns {object} The flattened and simplified schema.
+ * @returns {unknown} The flattened and simplified schema.
  */
 export function flattenSchema(schema, api) {
     if (!schema || typeof schema !== 'object') {
         return schema;
     }
 
+    /** @type {Record<string, unknown>} */
     const schemaCopy = structuredClone(schema);
     const isGoogleApi = [CHAT_COMPLETION_SOURCES.VERTEXAI, CHAT_COMPLETION_SOURCES.MAKERSUITE].includes(api);
 
-    const definitions = schemaCopy.$defs || {};
+    /** @type {Record<string, unknown>} */
+    const definitions = (schemaCopy.$defs && typeof schemaCopy.$defs === 'object') ? /** @type {Record<string, unknown>} */ (schemaCopy.$defs) : {};
     delete schemaCopy.$defs;
 
+    /**
+     * @param {unknown} obj
+     * @param {string[]} [parents]
+     * @returns {unknown}
+     */
     function resolve(obj, parents = []) {
         if (!obj || typeof obj !== 'object') {
             return obj;
@@ -1461,33 +1534,36 @@ export function flattenSchema(schema, api) {
             return obj.map(item => resolve(item, parents));
         }
 
+        const recordObj = /** @type {Record<string, unknown>} */ (obj);
+
         // 1. Resolve $refs first
-        if (obj.$ref?.startsWith('#/$defs/')) {
-            const defName = obj.$ref.split('/').pop();
-            if (parents.includes(defName)) return {}; // Prevent infinite recursion
-            if (definitions[defName]) {
+        if (typeof recordObj.$ref === 'string' && recordObj.$ref.startsWith('#/$defs/')) {
+            const defName = recordObj.$ref.split('/').pop();
+            if (defName && parents.includes(defName)) return {}; // Prevent infinite recursion
+            if (defName && definitions[defName]) {
                 return resolve(structuredClone(definitions[defName]), [...parents, defName]);
             }
             return {}; // Broken reference
         }
 
         // 2. Process the object's properties
+        /** @type {Record<string, unknown>} */
         const result = {};
-        for (const key in obj) {
-            if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+        for (const key in recordObj) {
+            if (!Object.prototype.hasOwnProperty.call(recordObj, key)) continue;
 
             // For Google, filter unsupported top-level keywords
             if (isGoogleApi && ['default', 'additionalProperties', 'exclusiveMinimum', 'propertyNames'].includes(key)) {
                 continue;
             }
 
-            result[key] = resolve(obj[key], parents);
+            result[key] = resolve(recordObj[key], parents);
         }
 
         return result;
     }
 
-    const flattenedSchema = resolve(schemaCopy);
+    const flattenedSchema = /** @type {Record<string, unknown>} */ (resolve(schemaCopy));
     delete flattenedSchema.$schema;
     return flattenedSchema;
 }
@@ -1517,7 +1593,8 @@ export function tryReadFileSync(filePath) {
             return fs.readFileSync(filePath, 'utf8');
         }
     } catch (error) {
-        console.error(`Error reading ${filePath}: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`Error reading ${filePath}: ${errorMessage}`);
     }
     return null;
 }
@@ -1554,7 +1631,8 @@ export async function readFirstLine(filePath) {
         }
         return '';
     } catch (error) {
-        console.error(`Error reading first line of ${filePath}:`, error.message);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`Error reading first line of ${filePath}:`, errorMessage);
         return '';
     } finally {
         rl?.close();

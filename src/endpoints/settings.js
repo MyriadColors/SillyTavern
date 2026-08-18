@@ -48,8 +48,8 @@ function triggerAutoSave(handle) {
 /**
  * Reads and parses files from a directory.
  * @param {string} directoryPath Path to the directory
- * @param {string} fileExtension File extension
- * @returns {Array} Parsed files
+ * @param {string} [fileExtension='.json'] File extension
+ * @returns {any[]} Parsed files
  */
 function readAndParseFromDirectory(directoryPath, fileExtension = '.json') {
     const files = fs
@@ -57,6 +57,7 @@ function readAndParseFromDirectory(directoryPath, fileExtension = '.json') {
         .filter(x => path.parse(x).ext == fileExtension)
         .sort();
 
+    /** @type {any[]} */
     const parsedFiles = [];
 
     files.forEach(item => {
@@ -89,6 +90,19 @@ export function getSettingsBackupFilePrefix(handle) {
     return `settings_${handle}_`;
 }
 
+/**
+ * @typedef {object} ReadPresetsOptions
+ * @property {((a: string, b: string) => number)|undefined} [sortFunction] Sort function
+ * @property {boolean} [removeFileExtension=false] Whether to remove file extension
+ * @property {string} [fileExtension='.json'] File extension
+ */
+
+/**
+ * Reads preset files from a directory.
+ * @param {string} directoryPath Path to the directory
+ * @param {ReadPresetsOptions} [options={}] Preset reading options
+ * @returns {{ fileContents: string[], fileNames: string[] }} Object containing file contents and file names
+ */
 function readPresetsFromDirectory(directoryPath, options = {}) {
     const {
         sortFunction,
@@ -97,7 +111,9 @@ function readPresetsFromDirectory(directoryPath, options = {}) {
     } = options;
 
     const files = fs.readdirSync(directoryPath).sort(sortFunction).filter(x => path.parse(x).ext == fileExtension);
+    /** @type {string[]} */
     const fileContents = [];
+    /** @type {string[]} */
     const fileNames = [];
 
     files.forEach(item => {
@@ -140,19 +156,28 @@ function backupUserSettings(handle, preventDuplicates) {
         return;
     }
 
+    if (!fs.existsSync(userDirectories.backups)) {
+        fs.mkdirSync(userDirectories.backups, { recursive: true });
+    }
+
     const backupFile = path.join(userDirectories.backups, `${getSettingsBackupFilePrefix(handle)}${generateTimestamp()}.json`);
     const sourceFile = path.join(userDirectories.root, SETTINGS_FILE);
-
-    if (preventDuplicates && isDuplicateBackup(handle, sourceFile)) {
-        return;
-    }
 
     if (!fs.existsSync(sourceFile)) {
         return;
     }
 
-    fs.copyFileSync(sourceFile, backupFile);
-    removeOldBackups(userDirectories.backups, `settings_${handle}`);
+    if (preventDuplicates && isDuplicateBackup(handle, sourceFile)) {
+        return;
+    }
+
+    try {
+        fs.copyFileSync(sourceFile, backupFile);
+        removeOldBackups(userDirectories.backups, `settings_${handle}`);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`Failed to create settings backup for user ${handle}:`, message);
+    }
 }
 
 /**
@@ -210,8 +235,9 @@ router.post('/save', function (request, response) {
         triggerAutoSave(request.user.profile.handle);
         response.send({ result: 'ok' });
     } catch (err) {
-        console.error(err);
-        response.send(err);
+        console.error('Failed to save settings:', err);
+        const errorMessage = err instanceof Error ? err.message : 'Failed to save settings';
+        response.status(500).json({ error: errorMessage });
     }
 });
 

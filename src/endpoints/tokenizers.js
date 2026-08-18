@@ -20,10 +20,12 @@ import { getConfigValue, isValidUrl, trimV1 } from '../util.js';
  * @typedef { (req: import('express').Request, res: import('express').Response) => Promise<any> } TokenizationHandler
  */
 
+const MAX_TIKTOKEN_CACHE_SIZE = 10;
+
 /**
- * @type {{[key: string]: import('tiktoken').Tiktoken}} Tokenizers cache
+ * @type {Map<string, import('tiktoken').Tiktoken>} Tokenizers cache
  */
-const tokenizersCache = {};
+const tokenizersCache = new Map();
 
 /**
  * @type {string[]}
@@ -112,7 +114,7 @@ async function getPathToTokenizer(model, fallbackModel) {
             // If the file was downloaded manually
             if (isCompressed) {
                 const compressedBuffer = await fs.promises.readFile(cachedFile);
-                const decompressedBuffer = await gunzip(compressedBuffer);
+                const decompressedBuffer = await gunzip(/** @type {any} */ (compressedBuffer));
                 writeFileAtomicSync(uncompressedPath, decompressedBuffer);
                 await fs.promises.unlink(cachedFile);
                 return uncompressedPath;
@@ -132,7 +134,7 @@ async function getPathToTokenizer(model, fallbackModel) {
 
         const arrayBuffer = await response.arrayBuffer();
         if (isCompressed) {
-            const decompressedBuffer = await gunzip(arrayBuffer);
+            const decompressedBuffer = await gunzip(/** @type {any} */ (arrayBuffer));
             writeFileAtomicSync(uncompressedPath, decompressedBuffer);
             return uncompressedPath;
         }
@@ -140,13 +142,14 @@ async function getPathToTokenizer(model, fallbackModel) {
         writeFileAtomicSync(cachedFile, Buffer.from(arrayBuffer));
         return cachedFile;
     } catch (error) {
-        const getLastSegment = str => str?.split('/')?.pop() || '';
+        const getLastSegment = (/** @type {string|undefined} */ str) => str?.split('/')?.pop() || '';
+        const errorMessage = error instanceof Error ? error.message : String(error);
         if (fallbackModel) {
-            console.error(`Could not get a tokenizer from ${getLastSegment(model)}. Reason: ${error.message}. Using a fallback model: ${getLastSegment(fallbackModel)}.`);
+            console.error(`Could not get a tokenizer from ${getLastSegment(model)}. Reason: ${errorMessage}. Using a fallback model: ${getLastSegment(fallbackModel)}.`);
             return fallbackModel;
         }
 
-        throw new Error(`Failed to instantiate a tokenizer and fallback is not provided. Reason: ${error.message}`);
+        throw new Error(`Failed to instantiate a tokenizer and fallback is not provided. Reason: ${errorMessage}`);
     }
 }
 
@@ -155,9 +158,9 @@ async function getPathToTokenizer(model, fallbackModel) {
  */
 class SentencePieceTokenizer {
     /**
-     * @type {import('@agnai/sentencepiece-js').SentencePieceProcessor} Sentencepiece tokenizer instance
+     * @type {any} Sentencepiece tokenizer instance
      */
-    #instance;
+    #instance = null;
     /**
      * @type {string} Path to the tokenizer model
      */
@@ -179,7 +182,7 @@ class SentencePieceTokenizer {
 
     /**
      * Gets the Sentencepiece tokenizer instance.
-     * @returns {Promise<import('@agnai/sentencepiece-js').SentencePieceProcessor|null>} Sentencepiece tokenizer instance
+     * @returns {Promise<any>} Sentencepiece tokenizer instance
      */
     async get() {
         if (this.#instance) {
@@ -188,7 +191,7 @@ class SentencePieceTokenizer {
 
         try {
             const pathToModel = await getPathToTokenizer(this.#model, this.#fallbackModel);
-            this.#instance = new SentencePieceProcessor();
+            this.#instance = new (/** @type {any} */ (SentencePieceProcessor))();
             await this.#instance.load(pathToModel);
             console.info('Instantiated the tokenizer for', path.parse(pathToModel).name);
             return this.#instance;
@@ -204,9 +207,9 @@ class SentencePieceTokenizer {
  */
 class WebTokenizer {
     /**
-     * @type {Tokenizer} Web tokenizer instance
+     * @type {Tokenizer|null} Web tokenizer instance
      */
-    #instance;
+    #instance = null;
     /**
      * @type {string} Path to the tokenizer model
      */
@@ -238,7 +241,7 @@ class WebTokenizer {
         try {
             const pathToModel = await getPathToTokenizer(this.#model, this.#fallbackModel);
             const fileBuffer = await fs.promises.readFile(pathToModel);
-            this.#instance = await Tokenizer.fromJSON(fileBuffer);
+            this.#instance = await Tokenizer.fromJSON(/** @type {ArrayBuffer} */ (fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength)));
             console.info('Instantiated the tokenizer for', path.parse(pathToModel).name);
             return this.#instance;
         } catch (error) {
@@ -396,6 +399,12 @@ async function countSentencepieceArrayTokens(tokenizer, array) {
     return num_tokens;
 }
 
+/**
+ * Gets the token chunks for the given token IDs using the Tiktoken tokenizer.
+ * @param {import('tiktoken').Tiktoken} tokenizer Tiktoken instance
+ * @param {number[]} ids Token IDs
+ * @returns {Promise<string[]>} Token chunks
+ */
 async function getTiktokenChunks(tokenizer, ids) {
     const decoder = new TextDecoder();
     const chunks = [];
@@ -526,14 +535,40 @@ export function getTokenizerModel(requestModel) {
     return 'gpt-3.5-turbo';
 }
 
+/**
+ * Gets or initializes a Tiktoken tokenizer for the given model name from cache.
+ * @param {string} model Model name
+ * @returns {import('tiktoken').Tiktoken} Tiktoken instance
+ */
 export function getTiktokenTokenizer(model) {
-    if (tokenizersCache[model]) {
-        return tokenizersCache[model];
+    if (tokenizersCache.has(model)) {
+        const cached = tokenizersCache.get(model);
+        if (cached) {
+            tokenizersCache.delete(model);
+            tokenizersCache.set(model, cached);
+            return cached;
+        }
     }
 
-    const tokenizer = tiktoken.encoding_for_model(model);
+    const tokenizer = tiktoken.encoding_for_model(/** @type {import('tiktoken').TiktokenModel} */ (model));
     console.info('Instantiated the tokenizer for', model);
-    tokenizersCache[model] = tokenizer;
+
+    if (tokenizersCache.size >= MAX_TIKTOKEN_CACHE_SIZE) {
+        const oldestKey = tokenizersCache.keys().next().value;
+        if (oldestKey) {
+            const oldestTokenizer = tokenizersCache.get(oldestKey);
+            tokenizersCache.delete(oldestKey);
+            if (oldestTokenizer && typeof oldestTokenizer.free === 'function') {
+                try {
+                    oldestTokenizer.free();
+                } catch {
+                    // Ignore free errors
+                }
+            }
+        }
+    }
+
+    tokenizersCache.set(model, tokenizer);
     return tokenizer;
 }
 
@@ -601,7 +636,7 @@ function createSentencepieceDecodingHandler(tokenizer) {
                 return response.sendStatus(400);
             }
 
-            const ids = request.body.ids || [];
+            const ids = /** @type {number[]} */ (Array.isArray(request.body.ids) ? request.body.ids : []);
             const instance = await tokenizer?.get();
             if (!instance) throw new Error('Failed to load the Sentencepiece tokenizer');
             const ops = ids.map(id => instance.decodeIds([id]));
@@ -661,7 +696,7 @@ function createTiktokenDecodingHandler(modelId) {
                 return response.sendStatus(400);
             }
 
-            const ids = request.body.ids || [];
+            const ids = /** @type {number[]} */ (Array.isArray(request.body.ids) ? request.body.ids : []);
             const tokenizer = getTiktokenTokenizer(modelId);
             const textBytes = tokenizer.decode(new Uint32Array(ids));
             const text = new TextDecoder().decode(textBytes);
@@ -1078,6 +1113,7 @@ router.post('/remote/textgenerationwebui/encode', async function (request, respo
     const model = String(request.body.model) || '';
 
     try {
+        /** @type {{ method: string; headers: Record<string, string>; body?: string }} */
         const args = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

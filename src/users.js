@@ -17,7 +17,7 @@ import sanitize from 'sanitize-filename';
 import ipMatching from 'ip-matching';
 
 import { USER_DIRECTORY_TEMPLATE, DEFAULT_USER, PUBLIC_DIRECTORIES, SETTINGS_FILE, UPLOADS_DIRECTORY } from './constants.js';
-import { getConfigValue, color, delay, generateTimestamp, invalidateFirefoxCache, isPathUnderParent, setPermissionsSync } from './util.js';
+import { getConfigValue, color, delay, generateTimestamp, invalidateFirefoxCache, isPathUnderParent, safeReadJsonSync, setPermissionsSync } from './util.js';
 import { allowKeysExposure, readSecret, writeSecret, SECRETS_FILE } from './endpoints/secrets.js';
 import { getContentOfType } from './endpoints/content-manager.js';
 import { serverDirectory } from './server-directory.js';
@@ -418,7 +418,8 @@ export async function migrateUserData() {
                 fs.rmSync(migration.old, { recursive: true, force: true });
             }
         } catch (error) {
-            console.error(color.red(`Error migrating ${migration.old} to ${migration.new}:`), error.message);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(color.red(`Error migrating ${migration.old} to ${migration.new}:`), errorMessage);
             errors.push(migration.old);
         }
     }
@@ -460,8 +461,8 @@ export async function migrateSystemPrompts() {
                 const instructPath = path.join(directory.instruct, instruct);
                 const sysPromptPath = path.join(directory.sysprompt, instruct);
                 if (path.extname(instruct) === '.json' && !fs.existsSync(sysPromptPath)) {
-                    const instructData = JSON.parse(fs.readFileSync(instructPath, 'utf8'));
-                    if ('system_prompt' in instructData && 'name' in instructData) {
+                    const instructData = safeReadJsonSync(instructPath);
+                    if (instructData && 'system_prompt' in instructData && 'name' in instructData) {
                         const backupPath = path.join(backupsPath, `${instructData.name}.json`);
                         fs.cpSync(instructPath, backupPath, { force: true });
                         const syspromptData = { name: instructData.name, content: instructData.system_prompt };
@@ -688,12 +689,14 @@ export function getUserDirectories(handle) {
         }
     }
 
+    /** @type {Record<string, string>} */
     const directories = structuredClone(USER_DIRECTORY_TEMPLATE);
     for (const key in directories) {
-        directories[key] = path.join(globalThis.DATA_ROOT, handle, USER_DIRECTORY_TEMPLATE[key]);
+        directories[key] = path.join(globalThis.DATA_ROOT, handle, directories[key]);
     }
-    DIRECTORIES_CACHE.set(handle, directories);
-    return directories;
+    const userDirs = /** @type {UserDirectoryList} */ (directories);
+    DIRECTORIES_CACHE.set(handle, userDirs);
+    return userDirs;
 }
 
 /**
@@ -714,7 +717,7 @@ export async function getUserAvatar(handle) {
         // Fallback to reading from files if custom avatar is not set
         const directory = getUserDirectories(handle);
         const pathToSettings = path.join(directory.root, SETTINGS_FILE);
-        const settings = fs.existsSync(pathToSettings) ? JSON.parse(fs.readFileSync(pathToSettings, 'utf8')) : {};
+        const settings = safeReadJsonSync(pathToSettings, {});
         const avatarFile = settings?.power_user?.default_persona || settings?.user_avatar;
         if (!avatarFile) {
             return PUBLIC_USER_AVATAR;
@@ -742,9 +745,13 @@ export function shouldRedirectToLogin(request) {
 }
 
 /**
+ * @typedef {import('express').Request & { session: (CookieSessionInterfaces.CookieSessionObject & { handle?: string | null; version?: string | null; touch?: number; csrfToken?: any }) | any }} SessionRequest
+ */
+
+/**
  * Tries auto-login if there is only one user and it's not password protected.
  * or another configured method such authlia or basic
- * @param {import('express').Request} request Request object
+ * @param {SessionRequest} request Request object
  * @param {boolean} basicAuthMode If Basic auth mode is enabled
  * @returns {Promise<boolean>} Whether auto-login was performed
  */
@@ -776,7 +783,7 @@ export async function tryAutoLogin(request, basicAuthMode) {
 
 /**
  * Tries auto-login if there is only one user and it's not password protected.
- * @param {import('express').Request} request Request object
+ * @param {SessionRequest} request Request object
  * @returns {Promise<boolean>} Whether auto-login was performed
  */
 async function singleUserLogin(request) {
@@ -799,7 +806,7 @@ async function singleUserLogin(request) {
 /**
  * Attempts auto-login using an Authelia header.
  * https://www.authelia.com/integration/trusted-header-sso/introduction/
- * @param {import('express').Request} request Request object
+ * @param {SessionRequest} request Request object
  * @returns {Promise<boolean>} Whether auto-login was performed
  */
 async function autheliaUserLogin(request) {
@@ -809,7 +816,7 @@ async function autheliaUserLogin(request) {
 /**
  * Attempts auto-login using an Authentik header.
  * https://docs.goauthentik.io/add-secure-apps/providers/proxy/forward_auth/
- * @param {import('express').Request} request Request object
+ * @param {SessionRequest} request Request object
  * @returns {Promise<boolean>} Whether auto-login was performed
  */
 async function authentikUserLogin(request) {
@@ -856,7 +863,7 @@ function isRequestFromTrustedProxy(ip) {
 
 /**
  * Tries auto-login with a given header.
- * @param {import('express').Request} request Request object
+ * @param {SessionRequest} request Request object
  * @param {string} [header='Remote-User'] The header to use for the trusted user
  * @returns {Promise<boolean>} Whether auto-login was performed
  */
@@ -894,7 +901,7 @@ async function headerUserLogin(request, header = 'Remote-User') {
 
 /**
  * Tries auto-login with basic auth username.
- * @param {import('express').Request} request Request object
+ * @param {SessionRequest} request Request object
  * @returns {Promise<boolean>} Whether auto-login was performed
  */
 async function basicUserLogin(request) {
@@ -948,7 +955,7 @@ export function getAccountVersion(user) {
 
 /**
  * Middleware to add user data to the request object.
- * @param {import('express').Request} request Request object
+ * @param {SessionRequest} request Request object
  * @param {import('express').Response} response Response object
  * @param {import('express').NextFunction} next Next function
  */

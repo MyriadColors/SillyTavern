@@ -125,3 +125,20 @@ export function retryAfter(response, rateLimit) {
     response.set('Retry-After', retryAfter.toString());
     return response;
 }
+
+/**
+ * Wraps an async Express route or middleware to catch rejected promises and forward them to next(err).
+ * Prevents hanging requests and unhandled rejections across Express 4.
+ * @template {(req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => any} T
+ * @param {T} fn Async handler function
+ * @returns {T} Wrapped handler function
+ */
+export function asyncHandler(fn) {
+    return (req, res, next) => {
+        try {
+            Promise.resolve(fn(req, res, next)).catch(next);
+        } catch (err) {
+            next(err);
+        }
+    };
+}

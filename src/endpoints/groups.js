@@ -6,14 +6,14 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync, default as writeFileAtomic } from 'write-file-atomic';
 
-import { color, tryParse } from '../util.js';
+import { color, tryParse, safeReadJsonSync } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 
 export const router = express.Router();
 
 /**
  * Warns if group data contains deprecated metadata keys and removes them.
- * @param {object} groupData Group data object
+ * @param {Record<string, any>} groupData Group data object
  */
 function warnOnGroupMetadata(groupData) {
     if (typeof groupData !== 'object' || groupData === null) {
@@ -111,6 +111,7 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
 }
 
 router.post('/all', (request, response) => {
+    /** @type {any[]} */
     const groups = [];
 
     if (!fs.existsSync(request.user.directories.groups)) {
@@ -210,7 +211,7 @@ router.post('/delete', getFileNameValidationFunction('id'), async (request, resp
 
     try {
         // Delete group chats
-        const group = JSON.parse(fs.readFileSync(pathToGroup, 'utf8'));
+        const group = safeReadJsonSync(pathToGroup);
 
         if (group && Array.isArray(group.chats)) {
             for (const chat of group.chats) {

@@ -6,7 +6,7 @@ import sanitize from 'sanitize-filename';
 import { CheckRepoActions, default as simpleGit } from 'simple-git';
 
 import { PUBLIC_DIRECTORIES } from '../constants.js';
-import { getConfigValue, isValidUrl } from '../util.js';
+import { getConfigValue, isValidUrl, safeReadJsonSync } from '../util.js';
 import { createGitClient } from '../git/client.js';
 
 const gitBackend = getConfigValue('git.backend', 'auto');
@@ -19,7 +19,7 @@ const OPTIONS = Object.freeze({ timeout: { block: 5 * 60 * 1000 } });
 /**
  * This function extracts the extension information from the manifest file.
  * @param {string} extensionPath - The path of the extension folder
- * @returns {Promise<Object>} - Returns the manifest data as an object
+ * @returns {Promise<Record<string, any>>} - Returns the manifest data as an object
  */
 async function getManifest(extensionPath) {
     const manifestPath = path.join(extensionPath, 'manifest.json');
@@ -29,14 +29,17 @@ async function getManifest(extensionPath) {
         throw new Error(`Manifest file not found at ${manifestPath}`);
     }
 
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const manifest = safeReadJsonSync(manifestPath);
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+        throw new Error(`Invalid manifest file at ${manifestPath}`);
+    }
     return manifest;
 }
 
 /**
  * This function checks if the local repository is up-to-date with the remote repository.
  * @param {string} extensionPath - The path of the extension folder
- * @returns {Promise<Object>} - Returns the extension information as an object
+ * @returns {Promise<{ isUpToDate: boolean; remoteUrl: string }>} - Returns the extension information as an object
  */
 async function checkIfRepoIsUpToDate(extensionPath) {
     const git = simpleGit({ baseDir: extensionPath, ...OPTIONS });
@@ -131,6 +134,7 @@ router.post('/install', async (request, response) => {
             return response.status(409).send(`Directory already exists at ${extensionPath}`);
         }
 
+        /** @type {{ depth: number; branch?: string }} */
         const cloneOptions = { depth: 1 };
         if (branch) {
             cloneOptions.branch = branch;

@@ -32,6 +32,8 @@ import {
     Cache,
     MemoryLimitedMap,
 } from '../src/util';
+import { asyncHandler } from '../src/express-common';
+import { getFileNameValidationFunction } from '../src/middleware/validateFileName';
 
 describe('keyToEnv', () => {
     test('should convert dotted key to env var format', () => {
@@ -687,3 +689,117 @@ describe('MemoryLimitedMap', () => {
         expect(MemoryLimitedMap.estimateStringSize(null)).toBe(0);
     });
 });
+
+describe('asyncHandler', () => {
+    test('passes through successful async execution', async () => {
+        const handler = asyncHandler(async (req, res) => {
+            res.status(200).send('ok');
+        });
+        const req = {};
+        const res = {
+            status: jest.fn().mockReturnThis(),
+            send: jest.fn(),
+        };
+        const next = jest.fn();
+
+        await handler(req, res, next);
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.send).toHaveBeenCalledWith('ok');
+        expect(next).not.toHaveBeenCalled();
+    });
+
+    test('catches async promise rejections and calls next(err)', async () => {
+        const error = new Error('Async failure');
+        const handler = asyncHandler(async () => {
+            throw error;
+        });
+        const req = {};
+        const res = {};
+        const next = jest.fn();
+
+        await handler(req, res, next);
+        expect(next).toHaveBeenCalledWith(error);
+    });
+
+    test('catches synchronous throws and calls next(err)', async () => {
+        const error = new Error('Sync failure');
+        const handler = asyncHandler(() => {
+            throw error;
+        });
+        const req = {};
+        const res = {};
+        const next = jest.fn();
+
+        await handler(req, res, next);
+        expect(next).toHaveBeenCalledWith(error);
+    });
+});
+
+describe('getFileNameValidationFunction', () => {
+    test('allows clean filenames and calls next', () => {
+        const middleware = getFileNameValidationFunction('filename');
+        const req = { body: { filename: 'my_avatar.png' } };
+        const res = { sendStatus: jest.fn() };
+        const next = jest.fn();
+
+        middleware(req, res, next);
+        expect(next).toHaveBeenCalled();
+        expect(res.sendStatus).not.toHaveBeenCalled();
+    });
+
+    test('blocks forward slash traversal', () => {
+        const middleware = getFileNameValidationFunction('filename');
+        const req = { body: { filename: 'sub/file.png' } };
+        const res = { sendStatus: jest.fn() };
+        const next = jest.fn();
+
+        middleware(req, res, next);
+        expect(res.sendStatus).toHaveBeenCalledWith(400);
+        expect(next).not.toHaveBeenCalled();
+    });
+
+    test('blocks backslash traversal', () => {
+        const middleware = getFileNameValidationFunction('filename');
+        const req = { body: { filename: 'sub\\file.png' } };
+        const res = { sendStatus: jest.fn() };
+        const next = jest.fn();
+
+        middleware(req, res, next);
+        expect(res.sendStatus).toHaveBeenCalledWith(400);
+        expect(next).not.toHaveBeenCalled();
+    });
+
+    test('blocks .. path traversal', () => {
+        const middleware = getFileNameValidationFunction('filename');
+        const req = { body: { filename: '..avatar.png' } };
+        const res = { sendStatus: jest.fn() };
+        const next = jest.fn();
+
+        middleware(req, res, next);
+        expect(res.sendStatus).toHaveBeenCalledWith(400);
+        expect(next).not.toHaveBeenCalled();
+    });
+
+    test('blocks non-string objects', () => {
+        const middleware = getFileNameValidationFunction('filename');
+        const req = { body: { filename: { injected: 'object' } } };
+        const res = { sendStatus: jest.fn() };
+        const next = jest.fn();
+
+        middleware(req, res, next);
+        expect(res.sendStatus).toHaveBeenCalledWith(400);
+        expect(next).not.toHaveBeenCalled();
+    });
+
+    test('skips validation when field is not in body', () => {
+        const middleware = getFileNameValidationFunction('filename');
+        const req = { body: { other_field: 'value' } };
+        const res = { sendStatus: jest.fn() };
+        const next = jest.fn();
+
+        middleware(req, res, next);
+        expect(next).toHaveBeenCalled();
+        expect(res.sendStatus).not.toHaveBeenCalled();
+    });
+});
+

@@ -59,6 +59,20 @@ declare global {
                 directories: UserDirectoryList;
             };
         }
+
+        export interface SessionData {
+            csrfToken?: CsrfSyncedToken | null;
+            handle?: string | null;
+            version?: string | null;
+            touch?: number;
+        }
+
+        export interface Session {
+            csrfToken?: CsrfSyncedToken | null;
+            handle?: string | null;
+            version?: string | null;
+            touch: any;
+        }
     }
 
     /**

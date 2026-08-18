@@ -16,6 +16,19 @@ function configureTransformers() {
     env.backends.onnx.wasm.wasmPaths = path.join(serverDirectory, 'node_modules', 'sillytavern-transformers', 'dist') + path.sep;
 }
 
+/**
+ * @typedef {object} TaskConfig
+ * @property {string} defaultModel - Default model ID
+ * @property {any} pipeline - Instantiated pipeline or null
+ * @property {string} configField - Configuration key in config.yaml
+ * @property {boolean} quantized - Whether quantization is enabled
+ * @property {string} [currentModel] - Active loaded model identifier
+ * @property {Promise<any>|null} [pipelinePromise] - In-flight initialization promise
+ */
+
+/**
+ * @type {Record<string, TaskConfig>}
+ */
 const tasks = {
     'text-classification': {
         defaultModel: 'Cohee/distilbert-base-uncased-go-emotions-onnx',
@@ -123,23 +136,43 @@ async function migrateCacheToDataDir() {
 export async function getPipeline(task, forceModel = '') {
     await migrateCacheToDataDir();
 
+    const targetModel = forceModel || getModelForTask(task);
+
     if (tasks[task].pipeline) {
-        if (forceModel === '' || tasks[task].currentModel === forceModel) {
+        if (tasks[task].currentModel === targetModel) {
             return tasks[task].pipeline;
         }
-        console.log('Disposing transformers.js pipeline for for task', task, 'with model', tasks[task].currentModel);
+        console.log('Disposing transformers.js pipeline for task', task, 'with model', tasks[task].currentModel);
         await tasks[task].pipeline.dispose();
+        tasks[task].pipeline = null;
+        tasks[task].pipelinePromise = null;
+    }
+
+    if (tasks[task].pipelinePromise && tasks[task].currentModel === targetModel) {
+        return tasks[task].pipelinePromise;
     }
 
     const cacheDir = path.join(globalThis.DATA_ROOT, '_cache');
-    const model = forceModel || getModelForTask(task);
     const localOnly = !getConfigValue('extensions.models.autoDownload', true, 'boolean');
-    console.log('Initializing transformers.js pipeline for task', task, 'with model', model);
-    const instance = await pipeline(task, model, { cache_dir: cacheDir, quantized: tasks[task].quantized ?? true, local_files_only: localOnly });
-    tasks[task].pipeline = instance;
-    tasks[task].currentModel = model;
+    console.log('Initializing transformers.js pipeline for task', task, 'with model', targetModel);
+
+    tasks[task].currentModel = targetModel;
+    tasks[task].pipelinePromise = (async () => {
+        try {
+            const instance = await pipeline(task, targetModel, {
+                cache_dir: cacheDir,
+                quantized: tasks[task].quantized ?? true,
+                local_files_only: localOnly,
+            });
+            tasks[task].pipeline = instance;
+            return instance;
+        } finally {
+            tasks[task].pipelinePromise = null;
+        }
+    })();
+
     // @ts-ignore
-    return instance;
+    return tasks[task].pipelinePromise;
 }
 
 export default {

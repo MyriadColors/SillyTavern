@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, test, expect, jest } from '
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getImages, readFirstLine, setConfigFilePath } from '../src/util';
+import { getImages, readFirstLine, safeReadFileSync, safeReadJsonSync, safeReadJson, setConfigFilePath } from '../src/util';
 import { MEDIA_REQUEST_TYPE } from '../src/constants';
 
 try {
@@ -291,3 +291,110 @@ describe('getChatInfo', () => {
         expect(noMatchInfo.match).toBe(false);
     });
 });
+
+describe('safeReadFileSync', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-saferead-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('returns file content for existing file', () => {
+        const filePath = path.join(tmpDir, 'hello.txt');
+        fs.writeFileSync(filePath, 'hello world', 'utf8');
+        expect(safeReadFileSync(filePath)).toBe('hello world');
+    });
+
+    test('returns null for non-existent file', () => {
+        const filePath = path.join(tmpDir, 'nonexistent.txt');
+        expect(safeReadFileSync(filePath)).toBeNull();
+    });
+
+    test('handles read error gracefully and returns null', () => {
+        const filePath = path.join(tmpDir, 'error.txt');
+        fs.writeFileSync(filePath, 'data', 'utf8');
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const readSpy = jest.spyOn(fs, 'readFileSync').mockImplementation(() => {
+            throw new Error('EACCES: permission denied');
+        });
+
+        try {
+            expect(safeReadFileSync(filePath)).toBeNull();
+            expect(warnSpy).toHaveBeenCalled();
+        } finally {
+            readSpy.mockRestore();
+            warnSpy.mockRestore();
+        }
+    });
+});
+
+describe('safeReadJsonSync', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-safereadjson-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('returns parsed JSON for valid json file', () => {
+        const filePath = path.join(tmpDir, 'data.json');
+        fs.writeFileSync(filePath, JSON.stringify({ a: 1, b: 'two' }), 'utf8');
+        expect(safeReadJsonSync(filePath)).toEqual({ a: 1, b: 'two' });
+    });
+
+    test('returns fallback for non-existent file', () => {
+        const filePath = path.join(tmpDir, 'missing.json');
+        expect(safeReadJsonSync(filePath)).toBeNull();
+        expect(safeReadJsonSync(filePath, { default: true })).toEqual({ default: true });
+    });
+
+    test('returns fallback for invalid json file', () => {
+        const filePath = path.join(tmpDir, 'invalid.json');
+        fs.writeFileSync(filePath, '{ invalid json content', 'utf8');
+        expect(safeReadJsonSync(filePath)).toBeNull();
+        expect(safeReadJsonSync(filePath, [])).toEqual([]);
+    });
+
+    test('returns fallback for empty file', () => {
+        const filePath = path.join(tmpDir, 'empty.json');
+        fs.writeFileSync(filePath, '', 'utf8');
+        expect(safeReadJsonSync(filePath)).toBeNull();
+    });
+});
+
+describe('safeReadJson', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-safereadjsonasync-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('returns parsed JSON asynchronously for valid json file', async () => {
+        const filePath = path.join(tmpDir, 'async.json');
+        fs.writeFileSync(filePath, JSON.stringify({ valid: true, count: 42 }), 'utf8');
+        const data = await safeReadJson(filePath);
+        expect(data).toEqual({ valid: true, count: 42 });
+    });
+
+    test('returns fallback asynchronously for missing or invalid file', async () => {
+        const missingPath = path.join(tmpDir, 'missing.json');
+        expect(await safeReadJson(missingPath)).toBeNull();
+        expect(await safeReadJson(missingPath, { fallback: true })).toEqual({ fallback: true });
+
+        const invalidPath = path.join(tmpDir, 'bad.json');
+        fs.writeFileSync(invalidPath, 'not json', 'utf8');
+        expect(await safeReadJson(invalidPath, {})).toEqual({});
+    });
+});
+
