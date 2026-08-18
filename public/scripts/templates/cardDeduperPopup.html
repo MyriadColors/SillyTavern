@@ -1,5 +1,5 @@
-<div class="card-deduper-dialog wide_dialogue_popup flex-container flexFlowColumn" style="max-height: 85vh; overflow: hidden;">
-    <div class="card-deduper-header flex-container justifySpaceBetween alignItemsCenter margin0" style="padding-bottom: 10px; border-bottom: 1px solid var(--SmartThemeBorderColor);">
+<div class="card-deduper-dialog flex-container flexFlowColumn flex1">
+    <div class="card-deduper-header flex-container justifySpaceBetween alignItemsCenter margin0 flexWrap" style="padding-bottom: 10px; border-bottom: 1px solid var(--SmartThemeBorderColor); gap: 10px;">
         <div class="flex-container alignItemsCenter" style="gap: 10px;">
             <i class="fa-solid fa-clone fa-xl"></i>
             <div>
@@ -7,7 +7,7 @@
                 <small class="notes" data-i18n="Safely scan, merge, and clean up duplicate character cards across your library.">Safely scan, merge, and clean up duplicate character cards across your library.</small>
             </div>
         </div>
-        <div class="flex-container" style="gap: 6px;">
+        <div class="flex-container flexWrap" style="gap: 6px;">
             <button id="card_deduper_tab_clusters" class="menu_button card-deduper-tab-btn active" title="Duplicate Clusters" data-i18n="[title]Duplicate Clusters">
                 <i class="fa-solid fa-list-check"></i> <span data-i18n="Clusters">Clusters</span>
             </button>
@@ -21,8 +21,8 @@
     </div>
 
     <!-- TAB 1: DUPLICATE CLUSTERS -->
-    <div id="card_deduper_page_clusters" class="card-deduper-page flex-container flexFlowColumn flex1" style="overflow-y: auto; padding: 10px 0; gap: 12px;">
-        <div class="card-deduper-stats-bar flex-container justifySpaceBetween alignItemsCenter highlight-block" style="padding: 10px 14px; border-radius: 8px;">
+    <div id="card_deduper_page_clusters" class="card-deduper-page flex-container flexFlowColumn flex1" style="overflow-y: auto; padding: 10px 0; gap: 12px; min-height: 0;">
+        <div class="card-deduper-stats-bar flex-container justifySpaceBetween alignItemsCenter flexWrap highlight-block" style="padding: 10px 14px; border-radius: 8px; gap: 10px;">
             <div>
                 <span id="card_deduper_stat_clusters" style="font-weight: bold; font-size: 1.1em;">0</span> <span data-i18n="Clusters Found">Clusters Found</span> &bull;
                 <span id="card_deduper_stat_duplicates" style="font-weight: bold; font-size: 1.1em;">0</span> <span data-i18n="Duplicate Cards">Duplicate Cards</span> &bull;
@@ -48,7 +48,7 @@
     </div>
 
     <!-- TAB 2: DETECTION & SAFETY SETTINGS -->
-    <div id="card_deduper_page_settings" class="card-deduper-page flex-container flexFlowColumn flex1" style="display: none; overflow-y: auto; padding: 10px 0; gap: 14px;">
+    <div id="card_deduper_page_settings" class="card-deduper-page flex-container flexFlowColumn flex1" style="display: none; overflow-y: auto; padding: 10px 0; gap: 14px; min-height: 0;">
         <div class="highlight-block" style="padding: 12px 16px; border-radius: 8px;">
             <h4 class="margin0" style="margin-bottom: 8px;"><i class="fa-solid fa-shield-cat"></i> <span data-i18n="Safety & Non-Destructive Protection">Safety & Non-Destructive Protection</span></h4>
             <p class="notes margin0" style="margin-bottom: 12px;" data-i18n="Choose how duplicate cards are handled. Safe Trash ensures zero data loss.">Choose how duplicate cards are handled. Safe Trash ensures zero data loss by preserving original files in an archive folder.</p>
@@ -133,7 +133,7 @@
     </div>
 
     <!-- TAB 3: ROLLBACK & BACKUPS -->
-    <div id="card_deduper_page_backups" class="card-deduper-page flex-container flexFlowColumn flex1" style="display: none; overflow-y: auto; padding: 10px 0; gap: 12px;">
+    <div id="card_deduper_page_backups" class="card-deduper-page flex-container flexFlowColumn flex1" style="display: none; overflow-y: auto; padding: 10px 0; gap: 12px; min-height: 0;">
         <div class="highlight-block" style="padding: 10px 14px; border-radius: 8px;">
             <h4 class="margin0" style="margin-bottom: 4px;"><i class="fa-solid fa-clock-rotate-left"></i> <span data-i18n="Deduplication Snapshots & 1-Click Rollback">Deduplication Snapshots & 1-Click Rollback</span></h4>
             <small class="notes" data-i18n="Every consolidation creates an automatic snapshot. You can undo any past operation below.">Every consolidation creates an automatic snapshot. You can undo any past operation below.</small>

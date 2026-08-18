@@ -2093,6 +2093,44 @@ export function calculateContentHash(card) {
 }
 
 /**
+ * Extracts and counts bigrams from a text string.
+ * @param {string} str Input string
+ * @returns {{ bigrams: Map<string, number>, total: number, length: number }}
+ */
+export function extractBigrams(str) {
+    if (!str || typeof str !== 'string') return { bigrams: new Map(), total: 0, length: 0 };
+    const clean = str.toLowerCase().replace(/\s+/g, ' ').trim();
+    const length = clean.length;
+    if (length < 2) return { bigrams: new Map(), total: 0, length };
+    const bigrams = new Map();
+    for (let i = 0; i < length - 1; i++) {
+        const bigram = clean.substring(i, i + 2);
+        bigrams.set(bigram, (bigrams.get(bigram) || 0) + 1);
+    }
+    return { bigrams, total: length - 1, length };
+}
+
+/**
+ * Calculates Dice coefficient similarity directly from precomputed bigram structures.
+ * @param {{ bigrams: Map<string, number>, total: number, length: number }} a Bigram data A
+ * @param {{ bigrams: Map<string, number>, total: number, length: number }} b Bigram data B
+ * @returns {number} Value between 0.0 and 1.0
+ */
+export function calculateBigramSimilarityFromData(a, b) {
+    if (!a?.total || !b?.total) return 0;
+    const totalBigrams = a.total + b.total;
+    let intersection = 0;
+    const [smallMap, largeMap] = a.bigrams.size <= b.bigrams.size ? [a.bigrams, b.bigrams] : [b.bigrams, a.bigrams];
+    for (const [bigram, countA] of smallMap.entries()) {
+        const countB = largeMap.get(bigram);
+        if (countB) {
+            intersection += Math.min(countA, countB);
+        }
+    }
+    return (2 * intersection) / totalBigrams;
+}
+
+/**
  * Calculates Dice coefficient similarity between two strings using bigrams.
  * @param {string} textA First text
  * @param {string} textB Second text
@@ -2105,26 +2143,9 @@ export function calculateSimilarityScore(textA, textB) {
     if (cleanA === cleanB) return 1;
     if (cleanA.length < 2 || cleanB.length < 2) return 0;
 
-    const getBigrams = (str) => {
-        const bigrams = new Map();
-        for (let i = 0; i < str.length - 1; i++) {
-            const bigram = str.substring(i, i + 2);
-            bigrams.set(bigram, (bigrams.get(bigram) || 0) + 1);
-        }
-        return bigrams;
-    };
-
-    const bigramsA = getBigrams(cleanA);
-    const bigramsB = getBigrams(cleanB);
-    let intersection = 0;
-
-    for (const [bigram, countA] of bigramsA.entries()) {
-        const countB = bigramsB.get(bigram) || 0;
-        intersection += Math.min(countA, countB);
-    }
-
-    const totalBigrams = (cleanA.length - 1) + (cleanB.length - 1);
-    return (2 * intersection) / totalBigrams;
+    const dataA = extractBigrams(cleanA);
+    const dataB = extractBigrams(cleanB);
+    return calculateBigramSimilarityFromData(dataA, dataB);
 }
 
 /**
@@ -2135,23 +2156,13 @@ export function calculateSimilarityScore(textA, textB) {
  */
 async function getCharacterChatStats(directories, internalName) {
     const chatsPath = path.join(directories.chats, internalName);
-    if (!fs.existsSync(chatsPath)) {
-        return { chatCount: 0, messageCount: 0 };
-    }
     try {
+        if (!fs.existsSync(chatsPath)) {
+            return { chatCount: 0, messageCount: 0 };
+        }
         const files = await fsPromises.readdir(chatsPath, { withFileTypes: true });
         const jsonlFiles = files.filter(f => f.isFile() && f.name.endsWith('.jsonl'));
-        let messageCount = 0;
-        for (const file of jsonlFiles) {
-            try {
-                const content = await fsPromises.readFile(path.join(chatsPath, file.name), 'utf8');
-                const lines = content.split('\n').filter(l => l.trim().length > 0);
-                messageCount += Math.max(0, lines.length - 1);
-            } catch {
-                // ignore unreadable file
-            }
-        }
-        return { chatCount: jsonlFiles.length, messageCount };
+        return { chatCount: jsonlFiles.length, messageCount: 0 };
     } catch {
         return { chatCount: 0, messageCount: 0 };
     }
@@ -2173,48 +2184,61 @@ router.post('/dedupe/scan', async function (request, response) {
         const files = await fsPromises.readdir(charactersDir, { withFileTypes: true });
         const pngFiles = files.filter(f => f.isFile() && f.name.toLowerCase().endsWith('.png'));
 
+        const BATCH_SIZE = 25;
         const cardRecords = [];
 
-        for (const file of pngFiles) {
-            const avatar = file.name;
-            const fullPath = path.join(charactersDir, avatar);
-            try {
-                const stat = await fsPromises.stat(fullPath);
-                const rawData = await readCharacterData(fullPath);
-                if (!rawData) continue;
+        for (let idx = 0; idx < pngFiles.length; idx += BATCH_SIZE) {
+            const batch = pngFiles.slice(idx, idx + BATCH_SIZE);
+            const batchResults = await Promise.all(batch.map(async (file) => {
+                const avatar = file.name;
+                const fullPath = path.join(charactersDir, avatar);
+                try {
+                    const [stat, rawData] = await Promise.all([
+                        fsPromises.stat(fullPath),
+                        readCharacterData(fullPath),
+                    ]);
+                    if (!rawData) return null;
 
-                const parsed = JSON.parse(rawData);
-                const card = getCharaCardV2(parsed, request.user.directories);
-                const data = card.data || card;
-                const internalName = path.parse(avatar).name;
-                const stats = await getCharacterChatStats(request.user.directories, internalName);
+                    const parsed = JSON.parse(rawData);
+                    const card = getCharaCardV2(parsed, request.user.directories);
+                    const data = card.data || card;
+                    const internalName = path.parse(avatar).name;
+                    const stats = await getCharacterChatStats(request.user.directories, internalName);
 
-                const chubPath = data.extensions?.chub?.full_path || '';
-                const chubId = data.extensions?.chub?.id !== undefined ? String(data.extensions.chub.id) : '';
-                const v3Id = data.id || card.id || '';
-                const sourceUrl = data.extensions?.source_url || data.extensions?.character_id || '';
+                    const chubPath = data.extensions?.chub?.full_path || '';
+                    const chubId = data.extensions?.chub?.id !== undefined ? String(data.extensions.chub.id) : '';
+                    const v3Id = data.id || card.id || '';
+                    const sourceUrl = data.extensions?.source_url || data.extensions?.character_id || '';
+                    const descText = [data.description, data.personality, data.scenario].filter(Boolean).join(' ');
 
-                cardRecords.push({
-                    avatar,
-                    name: data.name || internalName,
-                    normalizedName: normalizeCharacterName(data.name || internalName),
-                    character_version: data.character_version || '',
-                    creator: String(data.creator || card.creator || '').trim(),
-                    creator_notes: data.creator_notes || data.creatorcomment || '',
-                    contentHash: calculateContentHash(card),
-                    chubPath,
-                    chubId,
-                    v3Id,
-                    sourceUrl,
-                    descriptionText: [data.description, data.personality, data.scenario].filter(Boolean).join(' '),
-                    chatCount: stats.chatCount,
-                    messageCount: stats.messageCount,
-                    mtime: stat.mtimeMs,
-                    size: stat.size,
-                    card,
-                });
-            } catch (err) {
-                console.warn(`Could not read character for dedupe scan: ${avatar}`, err);
+                    return {
+                        avatar,
+                        name: data.name || internalName,
+                        normalizedName: normalizeCharacterName(data.name || internalName),
+                        character_version: data.character_version || '',
+                        creator: String(data.creator || card.creator || '').trim(),
+                        creator_notes: data.creator_notes || data.creatorcomment || '',
+                        contentHash: calculateContentHash(card),
+                        chubPath,
+                        chubId,
+                        v3Id,
+                        sourceUrl,
+                        descriptionText: descText,
+                        bigramData: extractBigrams(descText),
+                        chatCount: stats.chatCount,
+                        messageCount: stats.messageCount,
+                        mtime: stat.mtimeMs,
+                        size: stat.size,
+                        card,
+                    };
+                } catch (err) {
+                    console.warn(`Could not read character for dedupe scan: ${avatar}`, err);
+                    return null;
+                }
+            }));
+
+            for (const res of batchResults) {
+                if (res) cardRecords.push(res);
             }
         }
 
@@ -2240,63 +2264,114 @@ router.post('/dedupe/scan', async function (request, response) {
             parent.set(i, i);
         }
 
-        for (let i = 0; i < cardRecords.length; i++) {
-            for (let j = i + 1; j < cardRecords.length; j++) {
-                const a = cardRecords[i];
-                const b = cardRecords[j];
+        // Fast O(N) indexing for upstream IDs, content hash, and normalized names
+        const upstreamMap = new Map();
+        const hashMap = new Map();
+        const nameMap = new Map();
 
-                if (isIgnored(a.avatar, b.avatar)) {
-                    continue;
+        cardRecords.forEach((rec, idx) => {
+            if (rec.chubPath) {
+                const k = `chubPath:${rec.chubPath}`;
+                if (!upstreamMap.has(k)) upstreamMap.set(k, []);
+                upstreamMap.get(k).push(idx);
+            }
+            if (rec.chubId) {
+                const k = `chubId:${rec.chubId}`;
+                if (!upstreamMap.has(k)) upstreamMap.set(k, []);
+                upstreamMap.get(k).push(idx);
+            }
+            if (rec.v3Id) {
+                const k = `v3Id:${rec.v3Id}`;
+                if (!upstreamMap.has(k)) upstreamMap.set(k, []);
+                upstreamMap.get(k).push(idx);
+            }
+            if (rec.sourceUrl) {
+                const k = `sourceUrl:${rec.sourceUrl}`;
+                if (!upstreamMap.has(k)) upstreamMap.set(k, []);
+                upstreamMap.get(k).push(idx);
+            }
+            if (matchTypes.includes('hash') && rec.contentHash) {
+                if (!hashMap.has(rec.contentHash)) hashMap.set(rec.contentHash, []);
+                hashMap.get(rec.contentHash).push(idx);
+            }
+            if (matchTypes.includes('name') && rec.normalizedName) {
+                if (!nameMap.has(rec.normalizedName)) nameMap.set(rec.normalizedName, []);
+                nameMap.get(rec.normalizedName).push(idx);
+            }
+        });
+
+        // 1. Union exact upstream matches
+        for (const indices of upstreamMap.values()) {
+            for (let k = 1; k < indices.length; k++) {
+                if (!isIgnored(cardRecords[indices[0]].avatar, cardRecords[indices[k]].avatar)) {
+                    union(indices[0], indices[k]);
                 }
+            }
+        }
 
-                let matched = false;
-
-                // 1. Upstream Source ID Match (exact same upstream character)
-                if (
-                    (a.chubPath && b.chubPath && a.chubPath === b.chubPath) ||
-                    (a.chubId && b.chubId && a.chubId === b.chubId) ||
-                    (a.v3Id && b.v3Id && a.v3Id === b.v3Id) ||
-                    (a.sourceUrl && b.sourceUrl && a.sourceUrl === b.sourceUrl)
-                ) {
-                    matched = true;
+        // 2. Union exact content hash matches
+        if (matchTypes.includes('hash')) {
+            for (const indices of hashMap.values()) {
+                for (let k = 1; k < indices.length; k++) {
+                    if (!isIgnored(cardRecords[indices[0]].avatar, cardRecords[indices[k]].avatar)) {
+                        union(indices[0], indices[k]);
+                    }
                 }
+            }
+        }
 
-                // 2. Exact Definition Content Hash Match
-                if (!matched && matchTypes.includes('hash') && a.contentHash && a.contentHash === b.contentHash) {
-                    matched = true;
-                }
+        // 3. Guarded normalized name matches within same name buckets
+        if (matchTypes.includes('name')) {
+            for (const indices of nameMap.values()) {
+                if (indices.length < 2) continue;
+                for (let p = 0; p < indices.length; p++) {
+                    for (let q = p + 1; q < indices.length; q++) {
+                        const i = indices[p];
+                        const j = indices[q];
+                        if (find(i) === find(j)) continue;
+                        const a = cardRecords[i];
+                        const b = cardRecords[j];
+                        if (isIgnored(a.avatar, b.avatar)) continue;
 
-                // 3. If creators are both non-empty and differ, they are by different authors and not duplicates
-                const aCreator = a.creator.toLowerCase();
-                const bCreator = b.creator.toLowerCase();
-                const creatorsConflict = aCreator && bCreator && aCreator !== bCreator;
-
-                if (!matched && !creatorsConflict) {
-                    // 4. Guarded Name Match
-                    if (matchTypes.includes('name') && a.normalizedName && a.normalizedName === b.normalizedName) {
-                        const simScore = calculateSimilarityScore(a.descriptionText, b.descriptionText);
-                        if (aCreator && bCreator && aCreator === bCreator) {
-                            // Same creator + same normalized name: allow if text similarity is moderate (>= 0.35) or version differs
-                            if (simScore >= 0.35 || (a.character_version && b.character_version && a.character_version !== b.character_version)) {
-                                matched = true;
+                        const aCreator = a.creator.toLowerCase();
+                        const bCreator = b.creator.toLowerCase();
+                        const creatorsConflict = aCreator && bCreator && aCreator !== bCreator;
+                        if (!creatorsConflict) {
+                            const simScore = calculateBigramSimilarityFromData(a.bigramData, b.bigramData);
+                            if (aCreator && bCreator && aCreator === bCreator) {
+                                if (simScore >= 0.35 || (a.character_version && b.character_version && a.character_version !== b.character_version)) {
+                                    union(i, j);
+                                }
+                            } else if (simScore >= similarityThreshold) {
+                                union(i, j);
                             }
-                        } else if (simScore >= similarityThreshold) {
-                            // Creator omitted on one/both: require high similarity to avoid false positive on common names
-                            matched = true;
-                        }
-                    }
-
-                    // 5. Fuzzy Description Similarity Match
-                    if (!matched && matchTypes.includes('fuzzy') && a.descriptionText && b.descriptionText) {
-                        const score = calculateSimilarityScore(a.descriptionText, b.descriptionText);
-                        if (score >= similarityThreshold) {
-                            matched = true;
                         }
                     }
                 }
+            }
+        }
 
-                if (matched) {
-                    union(i, j);
+        // 4. Fuzzy description similarity across remaining pairs if explicitly enabled
+        if (matchTypes.includes('fuzzy')) {
+            for (let i = 0; i < cardRecords.length; i++) {
+                for (let j = i + 1; j < cardRecords.length; j++) {
+                    if (find(i) === find(j)) continue;
+                    const a = cardRecords[i];
+                    const b = cardRecords[j];
+                    if (isIgnored(a.avatar, b.avatar)) continue;
+
+                    const aCreator = a.creator.toLowerCase();
+                    const bCreator = b.creator.toLowerCase();
+                    if (aCreator && bCreator && aCreator !== bCreator) continue;
+
+                    if (!a.bigramData.total || !b.bigramData.total) continue;
+                    const maxPossible = (2 * Math.min(a.bigramData.total, b.bigramData.total)) / (a.bigramData.total + b.bigramData.total);
+                    if (maxPossible < similarityThreshold) continue;
+
+                    const score = calculateBigramSimilarityFromData(a.bigramData, b.bigramData);
+                    if (score >= similarityThreshold) {
+                        union(i, j);
+                    }
                 }
             }
         }

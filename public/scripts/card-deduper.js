@@ -225,7 +225,7 @@ export class CardDeduperManager {
                                     <span class="notes" style="font-size: 0.8em; font-weight: normal;">(${cluster.cards.length} cards)</span>
                                 </h4>
                             </div>
-                            <div class="flex-container" style="gap: 6px;">
+                            <div class="flex-container flexWrap" style="gap: 6px;">
                                 <button class="menu_button btn-ignore-pair" style="font-size: 0.8em;" title="${t`Ignore as duplicate`}">
                                     <i class="fa-solid fa-eye-slash"></i> ${t`Ignore`}
                                 </button>
@@ -246,19 +246,19 @@ export class CardDeduperManager {
                 cluster.cards.forEach((card) => {
                     const isPrimary = card.avatar === cluster.recommendedPrimary;
                     const cardItem = $(`
-                        <div class="card-deduper-card-item flex-container alignItemsCenter ${isPrimary ? 'is-primary-card' : ''}" style="flex: 1; min-width: 260px; padding: 8px 10px; background-color: var(--black30a); border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; gap: 10px;">
+                        <div class="card-deduper-card-item flex-container alignItemsCenter ${isPrimary ? 'is-primary-card' : ''}" style="flex: 1 1 240px; min-width: 0; max-width: 100%; padding: 8px 10px; background-color: var(--black30a); border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; gap: 10px;">
                             <input type="radio" name="primary_card_${clusterIdx}" value="${card.avatar}" ${isPrimary ? 'checked' : ''} title="${t`Select as Primary (to keep)`}" />
                             <img src="${getThumbnailUrl('avatar', card.avatar)}" onerror="this.src='${default_avatar}'" style="width: 48px; height: 48px; object-fit: cover; border-radius: 4px; flex-shrink: 0;" />
-                            <div class="flex1" style="overflow: hidden;">
+                            <div class="flex1" style="overflow: hidden; min-width: 0;">
                                 <div class="flex-container alignItemsCenter" style="gap: 4px;">
-                                    <strong style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${card.name}</strong>
-                                    ${card.character_version ? `<span class="tag" style="font-size: 0.7em; padding: 1px 4px;">v${card.character_version}</span>` : ''}
+                                    <strong style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">${card.name}</strong>
+                                    ${card.character_version ? `<span class="tag" style="font-size: 0.7em; padding: 1px 4px; flex-shrink: 0;">v${card.character_version}</span>` : ''}
                                     ${card.creator ? `<span class="notes" style="font-size: 0.75em; max-width: 100px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${card.creator}"><i class="fa-solid fa-user-pen"></i> ${card.creator}</span>` : ''}
-                                    ${isPrimary ? `<span class="tag card-deduper-primary-tag" style="font-size: 0.7em; padding: 1px 4px; background-color: var(--green);">${t`Primary`}</span>` : ''}
+                                    ${isPrimary ? `<span class="tag card-deduper-primary-tag" style="font-size: 0.7em; padding: 1px 4px; background-color: var(--green); flex-shrink: 0;">${t`Primary`}</span>` : ''}
                                 </div>
                                 <div class="notes" style="font-size: 0.8em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${card.avatar}</div>
                                 <div class="notes" style="font-size: 0.75em;">
-                                    <i class="fa-solid fa-comments"></i> ${card.chatCount || 0} chats (${card.messageCount || 0} msgs)
+                                    <i class="fa-solid fa-comments"></i> ${card.chatCount || 0} chats
                                 </div>
                             </div>
                         </div>
@@ -394,7 +394,7 @@ export class CardDeduperManager {
             cancelButton: t`Close`,
             wide: true,
             large: true,
-            allowVerticalScrolling: true,
+            allowVerticalScrolling: false,
         });
         await popup.show();
     }

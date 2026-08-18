@@ -272,14 +272,34 @@ body.no-blur .popup[open]::backdrop {
 
 /* Card Deduper Popup Styles */
 .card-deduper-dialog {
-    width: 780px;
-    max-width: 95vw;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+
+.popup:has(.card-deduper-dialog) .popup-body {
+    height: 100%;
+    max-height: 90vh;
+}
+
+.popup:has(.card-deduper-dialog) .popup-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0 4px;
 }
 
 .card-deduper-tab-btn {
-    padding: 4px 10px;
+    padding: 6px 12px;
     font-size: 0.85em;
     opacity: 0.8;
+    white-space: nowrap;
 }
 
 .card-deduper-tab-btn.active {
@@ -290,6 +310,7 @@ body.no-blur .popup[open]::backdrop {
 
 .card-deduper-card-item {
     transition: border-color 0.2s ease, background-color 0.2s ease;
+    box-sizing: border-box;
 }
 
 .card-deduper-card-item:hover {

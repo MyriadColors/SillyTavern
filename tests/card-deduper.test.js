@@ -52,6 +52,8 @@ jest.unstable_mockModule('../public/scripts/group-chats.js', () => ({
 let normalizeCharacterName;
 let calculateContentHash;
 let calculateSimilarityScore;
+let extractBigrams;
+let calculateBigramSimilarityFromData;
 let CardDeduperManager;
 
 beforeAll(async () => {
@@ -59,6 +61,8 @@ beforeAll(async () => {
     normalizeCharacterName = charsEndpoint.normalizeCharacterName;
     calculateContentHash = charsEndpoint.calculateContentHash;
     calculateSimilarityScore = charsEndpoint.calculateSimilarityScore;
+    extractBigrams = charsEndpoint.extractBigrams;
+    calculateBigramSimilarityFromData = charsEndpoint.calculateBigramSimilarityFromData;
 
     const deduperMod = await import('../public/scripts/card-deduper.js');
     CardDeduperManager = deduperMod.CardDeduperManager;
@@ -225,6 +229,34 @@ describe('Guarded Deduplication Matching Logic', () => {
 
         const simScore = calculateSimilarityScore(cardA.description, cardB.description);
         expect(simScore).toBeGreaterThan(0.7);
+    });
+});
+
+describe('extractBigrams and calculateBigramSimilarityFromData', () => {
+    test('extracts bigrams correctly and handles edge cases', () => {
+        expect(extractBigrams('').total).toBe(0);
+        expect(extractBigrams('a').total).toBe(0);
+        const res = extractBigrams('Alice');
+        expect(res.total).toBe(4);
+        expect(res.bigrams.get('al')).toBe(1);
+        expect(res.bigrams.get('li')).toBe(1);
+    });
+
+    test('calculates fast similarity score identical to calculateSimilarityScore', () => {
+        const textA = 'A courageous elven mage researching ancient elemental runes.';
+        const textB = 'A courageous elven wizard researching ancient mystical runes.';
+        const standardScore = calculateSimilarityScore(textA, textB);
+        const dataA = extractBigrams(textA);
+        const dataB = extractBigrams(textB);
+        const fastScore = calculateBigramSimilarityFromData(dataA, dataB);
+        expect(fastScore).toBeCloseTo(standardScore, 5);
+        expect(fastScore).toBeGreaterThan(0.7);
+    });
+
+    test('returns 0 for empty or one-character strings', () => {
+        const dataA = extractBigrams('');
+        const dataB = extractBigrams('Hello world');
+        expect(calculateBigramSimilarityFromData(dataA, dataB)).toBe(0);
     });
 });
 
