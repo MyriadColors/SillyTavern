@@ -56,10 +56,16 @@ describe('TavernCardValidator', () => {
             expect(v.validate()).toBe(false);
         });
 
-        test('prefers V1 when card satisfies both V1 and V2', () => {
+        test('prefers V2 when card satisfies both V1 and V2', () => {
             const card = { ...makeV1Card(), ...makeV2Card() };
             const v = new TavernCardValidator(card);
-            expect(v.validate()).toBe(1);
+            expect(v.validate()).toBe(2);
+        });
+
+        test('prefers V3 when card satisfies V1, V2, and V3', () => {
+            const card = { ...makeV1Card(), ...makeV2Card(), ...makeV3Card() };
+            const v = new TavernCardValidator(card);
+            expect(v.validate()).toBe(3);
         });
     });
 
@@ -229,6 +235,72 @@ describe('TavernCardValidator', () => {
             card.data = 'not an object';
             const v = new TavernCardValidator(card);
             expect(v.validateV3()).toBe(false);
+        });
+
+        test('rejects non-array alternate_greetings in V3', () => {
+            const card = makeV3Card();
+            card.data.alternate_greetings = 'string';
+            const v = new TavernCardValidator(card);
+            expect(v.validateV3()).toBe(false);
+            expect(v.lastValidationError).toBe('data.alternate_greetings');
+        });
+
+        test('rejects non-array group_only_greetings in V3', () => {
+            const card = makeV3Card();
+            card.data.group_only_greetings = 'string';
+            const v = new TavernCardValidator(card);
+            expect(v.validateV3()).toBe(false);
+            expect(v.lastValidationError).toBe('data.group_only_greetings');
+        });
+
+        test('rejects non-array tags in V3', () => {
+            const card = makeV3Card();
+            card.data.tags = 'string';
+            const v = new TavernCardValidator(card);
+            expect(v.validateV3()).toBe(false);
+            expect(v.lastValidationError).toBe('data.tags');
+        });
+
+        test('rejects non-array assets in V3', () => {
+            const card = makeV3Card();
+            card.data.assets = 'string';
+            const v = new TavernCardValidator(card);
+            expect(v.validateV3()).toBe(false);
+            expect(v.lastValidationError).toBe('data.assets');
+        });
+
+        test('accepts valid CCv3 card with all fields', () => {
+            const card = makeV3Card();
+            card.data = {
+                name: 'Test Character',
+                nickname: 'Tester',
+                description: 'A test character',
+                personality: 'Friendly',
+                scenario: 'In a test room',
+                first_mes: 'Hello!',
+                mes_example: '<START>\n{{user}}: Hi\n{{char}}: Hello',
+                creator_notes: 'Some notes',
+                creator_notes_multilingual: { en: 'Some notes' },
+                system_prompt: 'You are a test bot',
+                post_history_instructions: 'Be nice',
+                alternate_greetings: ['Hey there!'],
+                group_only_greetings: ['Hello everyone!'],
+                tags: ['test', 'bot'],
+                creator: 'Pedro',
+                character_version: '3.0',
+                source: ['https://example.com/card'],
+                creation_date: 1700000000,
+                modification_date: 1700000100,
+                assets: [{ type: 'icon', uri: 'https://example.com/icon.png', name: 'main_icon', ext: 'png' }],
+                character_book: {
+                    entries: [{ keys: ['room'], content: 'A large room', use_regex: false }],
+                    extensions: {},
+                },
+                extensions: {},
+            };
+            const v = new TavernCardValidator(card);
+            expect(v.validateV3()).toBe(true);
+            expect(v.validate()).toBe(3);
         });
     });
 

@@ -297,6 +297,23 @@ export class CardUpdateManager {
                 merged.character_version = incomingData.character_version;
                 merged.data.character_version = incomingData.character_version;
             }
+            // CCv3 definitions
+            if (incomingData.nickname !== undefined) {
+                merged.nickname = incomingData.nickname;
+                merged.data.nickname = incomingData.nickname;
+            }
+            if (incomingData.creator_notes_multilingual !== undefined) {
+                merged.creator_notes_multilingual = incomingData.creator_notes_multilingual;
+                merged.data.creator_notes_multilingual = incomingData.creator_notes_multilingual;
+            }
+            if (incomingData.source !== undefined) {
+                merged.source = incomingData.source;
+                merged.data.source = incomingData.source;
+            }
+            if (incomingData.assets !== undefined) {
+                merged.assets = Array.isArray(incomingData.assets) ? JSON.parse(JSON.stringify(incomingData.assets)) : [];
+                merged.data.assets = Array.isArray(incomingData.assets) ? JSON.parse(JSON.stringify(incomingData.assets)) : [];
+            }
         }
 
         // First message
@@ -327,10 +344,13 @@ export class CardUpdateManager {
             }
         }
 
-        // Alternate Greetings
+        // Alternate Greetings & Group Only Greetings
         if (options.alternateGreetingsMode === 'replace') {
             merged.data.alternate_greetings = Array.isArray(incomingData.alternate_greetings)
                 ? [...incomingData.alternate_greetings]
+                : [];
+            merged.data.group_only_greetings = Array.isArray(incomingData.group_only_greetings)
+                ? [...incomingData.group_only_greetings]
                 : [];
         } else if (options.alternateGreetingsMode === 'merge') {
             const existingGreetings = Array.isArray(merged.data.alternate_greetings)
@@ -347,6 +367,21 @@ export class CardUpdateManager {
                 }
             }
             merged.data.alternate_greetings = existingGreetings;
+
+            const existingGroupGreetings = Array.isArray(merged.data.group_only_greetings)
+                ? [...merged.data.group_only_greetings]
+                : [];
+            const incomingGroupGreetings = Array.isArray(incomingData.group_only_greetings)
+                ? incomingData.group_only_greetings
+                : [];
+
+            for (const greeting of incomingGroupGreetings) {
+                const exists = existingGroupGreetings.some(g => String(g).trim().toLowerCase() === String(greeting).trim().toLowerCase());
+                if (!exists && String(greeting).trim().length > 0) {
+                    existingGroupGreetings.push(greeting);
+                }
+            }
+            merged.data.group_only_greetings = existingGroupGreetings;
         }
 
         // Character Book (Embedded Lorebook)

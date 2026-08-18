@@ -159,6 +159,7 @@ class CharacterContextMenu {
             { id: 'character_context_menu_persona', callback: characterGroupOverlay.handleContextMenuPersona },
             { id: 'character_context_menu_tag', callback: characterGroupOverlay.handleContextMenuTag },
             { id: 'character_context_menu_dedupe', callback: characterGroupOverlay.handleContextMenuDedupe },
+            { id: 'character_context_menu_upgrade_v3', callback: characterGroupOverlay.handleContextMenuUpgradeV3 },
         ];
 
         contextMenuItems.forEach(contextMenuItem => document.getElementById(contextMenuItem.id).addEventListener('click', contextMenuItem.callback));
@@ -881,6 +882,41 @@ class BulkEditOverlay {
     handleContextMenuDedupe = async () => {
         const { CardDeduperManager } = await import('./card-deduper.js');
         await CardDeduperManager.openDeduperDialog();
+        this.browseState();
+    };
+
+    /**
+     * Upgrades selected characters to CCv3 format
+     */
+    handleContextMenuUpgradeV3 = async () => {
+        if (this.selectedCharacters.length === 0) {
+            toastr.warning(t`No characters selected`);
+            return;
+        }
+
+        const avatarUrls = this.selectedCharacters
+            .map(id => characters[id]?.avatar)
+            .filter(Boolean);
+
+        try {
+            const response = await fetch('/api/characters/upgrade-v3', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ avatar_urls: avatarUrls }),
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                toastr.success(t`Successfully upgraded ${data.count} character(s) to CCv3!`);
+                await getCharacters();
+            } else {
+                toastr.error(t`Failed to upgrade character(s) to CCv3.`);
+            }
+        } catch (error) {
+            console.error('Error in bulk CCv3 upgrade:', error);
+            toastr.error(t`An error occurred during CCv3 upgrade.`);
+        }
+
         this.browseState();
     };
 

@@ -117,11 +117,18 @@
  * @property {string} creatorcomment - creator's notes of the character
  * @property {string} [system_prompt] - system prompt
  * @property {string} [post_history_instructions] - post history instructions
+ * @property {string} [nickname] - CCv3 nickname override for {{char}}
+ * @property {string[]} [group_only_greetings] - CCv3 greetings used exclusively in group chats
+ * @property {Record<string, string>} [creator_notes_multilingual] - CCv3 multilingual creator notes
+ * @property {string[]} [source] - CCv3 source URLs or identifiers
+ * @property {number} [creation_date] - CCv3 unix creation timestamp in seconds
+ * @property {number} [modification_date] - CCv3 unix modification timestamp in seconds
+ * @property {Array<{type: string, uri: string, name: string, ext: string}>} [assets] - CCv3 asset metadata list
  * @property {string[]} tags - the tags of the character
  * @property {number} talkativeness - talkativeness
  * @property {boolean|string} fav - fav
  * @property {string} create_date - create_date
- * @property {v2CharData} data - v2 data extension
+ * @property {v2CharData|v3CharData} data - v2/v3 data extension
  * // Non-standard extensions added by the ST server (not part of the original data)
  * @property {string} chat - name of the current chat file chat
  * @property {string} avatar - file name of the avatar image (acts as a unique identifier)
@@ -138,9 +145,77 @@
  */
 
 /**
+ * Lorebook Entry V3 format (CCv3 standard).
+ * @typedef {object} v3LorebookEntry
+ * @property {string[]} keys - Primary keys to match against chat context
+ * @property {string} content - Main content to insert
+ * @property {Record<string, any>} extensions - Extension specific data
+ * @property {boolean} enabled - Whether entry is enabled
+ * @property {number} insertion_order - Insertion order priority in prompt
+ * @property {boolean} [case_sensitive] - Whether matching is case-sensitive
+ * @property {boolean} use_regex - Whether keys should be evaluated as RegExp
+ * @property {boolean} [constant] - Whether entry is unconditionally active
+ * @property {string} [name] - Entry identifier name
+ * @property {number} [priority] - Token budget eviction priority
+ * @property {number|string} [id] - Unique identifier
+ * @property {string} [comment] - Human-readable comment
+ * @property {boolean} [selective] - Whether selective secondary keys matching is active
+ * @property {string[]} [secondary_keys] - Secondary keys
+ * @property {'before_char'|'after_char'} [position] - Prompt injection position
+ */
+
+/**
+ * Lorebook V3 format (CCv3 standard).
+ * @typedef {object} v3Lorebook
+ * @property {string} [name] - Lorebook name
+ * @property {string} [description] - Lorebook description
+ * @property {number} [scan_depth] - Number of recent messages to scan
+ * @property {number} [token_budget] - Token budget cap for activated entries
+ * @property {boolean} [recursive_scanning] - Whether recursive scanning is allowed
+ * @property {Record<string, any>} extensions - Extension specific data
+ * @property {v3LorebookEntry[]} entries - List of lorebook entries
+ */
+
+/**
+ * Core Character Card V3 data payload (CCv3 standard).
+ * @typedef {object} v3CharData
+ * @property {string} name - Character name
+ * @property {string} [id] - Character UUID
+ * @property {string} description - Character description
+ * @property {string} character_version - Character version string
+ * @property {string} personality - Character personality traits
+ * @property {string} scenario - Character scenario/setting
+ * @property {string} first_mes - Primary greeting message
+ * @property {string} mes_example - Dialogue examples
+ * @property {string} creator_notes - Creator notes (English default)
+ * @property {string[]} tags - Tag labels
+ * @property {string} system_prompt - Main system prompt
+ * @property {string} post_history_instructions - Post-history jailbreak / instructions
+ * @property {string} creator - Creator name
+ * @property {string[]} alternate_greetings - Additional greeting variations
+ * @property {v2WorldInfoBook|v3Lorebook} [character_book] - Embedded lorebook
+ * @property {v2CharDataExtensionInfos|Record<string, any>} extensions - Extension settings
+ * @property {string} [nickname] - Optional nickname to replace {{char}}, <char>, <bot> in prompts
+ * @property {Record<string, string>} [creator_notes_multilingual] - ISO 639-1 multilingual creator notes
+ * @property {string[]} [source] - Source IDs or URLs
+ * @property {string[]} [group_only_greetings] - Greetings used exclusively in group chats
+ * @property {number} [creation_date] - Unix creation timestamp in seconds (UTC)
+ * @property {number} [modification_date] - Unix modification timestamp in seconds (UTC)
+ * @property {Array<{type: string, uri: string, name: string, ext: string}>} [assets] - Character asset definitions
+ */
+
+/**
+ * Character Card V3 format wrapper (CCv3 standard).
+ * @typedef {object} CharacterCardV3
+ * @property {'chara_card_v3'|string} spec - Format specification identifier ('chara_card_v3')
+ * @property {'3.0'|string} spec_version - Specification version ('3.0' or higher)
+ * @property {v3CharData} data - Core character payload
+ */
+
+/**
  * Union type representing any valid character card representation:
- * V2 card wrapper, SillyTavern in-memory character (v1CharData), or raw V2 data object.
- * @typedef {TavernCardV2 | v1CharData | v2CharData} CharacterCard
+ * V3 card wrapper, V2 card wrapper, SillyTavern in-memory character (v1CharData), or raw V2/V3 data object.
+ * @typedef {CharacterCardV3 | TavernCardV2 | v1CharData | v3CharData | v2CharData} CharacterCard
  */
 
 export default 0;// now this file is a module

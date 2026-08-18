@@ -511,6 +511,50 @@ function readFromV2(char) {
     // If 'json_data' was already saved, don't let it propagate
     _.unset(char, 'json_data');
 
+    // Bidirectional backfill: populate missing char.data fields from top-level char properties
+    const coreFields = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example'];
+    for (const field of coreFields) {
+        if (_.isUndefined(char.data[field]) && !_.isUndefined(char[field])) {
+            char.data[field] = char[field];
+        }
+    }
+
+    // Normalize partial array fields
+    if (typeof char.data.group_only_greetings === 'string') {
+        char.data.group_only_greetings = [char.data.group_only_greetings];
+    } else if (Array.isArray(char.data.group_only_greetings)) {
+        char.data.group_only_greetings = char.data.group_only_greetings.filter(x => typeof x === 'string' && x.trim().length > 0);
+    }
+
+    if (typeof char.data.alternate_greetings === 'string') {
+        char.data.alternate_greetings = [char.data.alternate_greetings];
+    } else if (Array.isArray(char.data.alternate_greetings)) {
+        char.data.alternate_greetings = char.data.alternate_greetings.filter(x => typeof x === 'string' && x.trim().length > 0);
+    }
+
+    if (typeof char.data.tags === 'string') {
+        char.data.tags = char.data.tags.split(',').map(x => x.trim()).filter(Boolean);
+    }
+
+    if (typeof char.data.source === 'string') {
+        char.data.source = [char.data.source];
+    }
+
+    // Normalize date fields to integer seconds
+    if (typeof char.data.creation_date === 'string') {
+        const parsed = Math.floor(Date.parse(char.data.creation_date) / 1000);
+        char.data.creation_date = !isNaN(parsed) && parsed > 0 ? parsed : Math.floor(Date.now() / 1000);
+    }
+    if (typeof char.data.modification_date === 'string') {
+        const parsed = Math.floor(Date.parse(char.data.modification_date) / 1000);
+        char.data.modification_date = !isNaN(parsed) && parsed > 0 ? parsed : Math.floor(Date.now() / 1000);
+    }
+
+    // Ensure extensions object exists
+    if (!char.data.extensions || typeof char.data.extensions !== 'object') {
+        char.data.extensions = {};
+    }
+
     const fieldMappings = {
         name: 'name',
         description: 'description',
@@ -553,6 +597,15 @@ function readFromV2(char) {
     });
 
     char.chat = char.chat ?? `${char.name} - ${humanizedDateTime()}`;
+
+    // Hoist CCv3 fields
+    if (char.data.nickname) char.nickname = char.data.nickname;
+    if (char.data.creator_notes_multilingual) char.creator_notes_multilingual = char.data.creator_notes_multilingual;
+    if (char.data.source) char.source = char.data.source;
+    if (char.data.group_only_greetings) char.group_only_greetings = char.data.group_only_greetings;
+    if (char.data.creation_date !== undefined) char.creation_date = char.data.creation_date;
+    if (char.data.modification_date !== undefined) char.modification_date = char.data.modification_date;
+    if (char.data.assets) char.assets = char.data.assets;
 
     return char;
 }
@@ -611,6 +664,37 @@ function charaFormatData(data, directories) {
     _.set(char, 'data.creator', data.creator || '');
     _.set(char, 'data.character_version', data.character_version || '');
     _.set(char, 'data.alternate_greetings', getAlternateGreetings(data));
+
+    // CCv3 fields
+    if (data.nickname !== undefined) {
+        _.set(char, 'nickname', data.nickname);
+        _.set(char, 'data.nickname', data.nickname);
+    }
+    if (data.group_only_greetings !== undefined) {
+        const groupGreetings = Array.isArray(data.group_only_greetings) ? data.group_only_greetings : [];
+        _.set(char, 'group_only_greetings', groupGreetings);
+        _.set(char, 'data.group_only_greetings', groupGreetings);
+    }
+    if (data.creator_notes_multilingual !== undefined) {
+        _.set(char, 'creator_notes_multilingual', data.creator_notes_multilingual);
+        _.set(char, 'data.creator_notes_multilingual', data.creator_notes_multilingual);
+    }
+    if (data.source !== undefined) {
+        _.set(char, 'source', Array.isArray(data.source) ? data.source : [String(data.source)]);
+        _.set(char, 'data.source', Array.isArray(data.source) ? data.source : [String(data.source)]);
+    }
+    if (data.assets !== undefined) {
+        _.set(char, 'assets', Array.isArray(data.assets) ? data.assets : []);
+        _.set(char, 'data.assets', Array.isArray(data.assets) ? data.assets : []);
+    }
+
+    const nowSecs = Math.floor(Date.now() / 1000);
+    if (!_.get(char, 'data.creation_date') && !_.get(char, 'creation_date')) {
+        _.set(char, 'data.creation_date', nowSecs);
+        _.set(char, 'creation_date', nowSecs);
+    }
+    _.set(char, 'data.modification_date', nowSecs);
+    _.set(char, 'modification_date', nowSecs);
 
     // ST extension fields to V2 object
     _.set(char, 'data.extensions.talkativeness', data.talkativeness || 0.5);
@@ -1831,12 +1915,144 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                     return response.sendStatus(400);
                 }
             }
+            case 'json_v3':
+            case 'v3': {
+                try {
+                    const json = await readCharacterData(filename);
+                    if (json === undefined) return response.sendStatus(400);
+                    const jsonObject = getCharaCardV2(JSON.parse(json), request.user.directories);
+                    unsetPrivateFields(jsonObject);
+                    const nowSecs = Math.floor(Date.now() / 1000);
+                    const v3Object = {
+                        spec: 'chara_card_v3',
+                        spec_version: '3.0',
+                        data: {
+                            ...jsonObject.data,
+                            name: jsonObject.name || jsonObject.data?.name || '',
+                            description: jsonObject.description || jsonObject.data?.description || '',
+                            personality: jsonObject.personality || jsonObject.data?.personality || '',
+                            scenario: jsonObject.scenario || jsonObject.data?.scenario || '',
+                            first_mes: jsonObject.first_mes || jsonObject.data?.first_mes || '',
+                            mes_example: jsonObject.mes_example || jsonObject.data?.mes_example || '',
+                            creator_notes: jsonObject.data?.creator_notes ?? jsonObject.creatorcomment ?? '',
+                            tags: Array.isArray(jsonObject.tags) ? jsonObject.tags : (Array.isArray(jsonObject.data?.tags) ? jsonObject.data.tags : []),
+                            system_prompt: jsonObject.data?.system_prompt ?? '',
+                            post_history_instructions: jsonObject.data?.post_history_instructions ?? '',
+                            creator: jsonObject.creator || jsonObject.data?.creator || '',
+                            character_version: jsonObject.character_version || jsonObject.data?.character_version || '1.0',
+                            alternate_greetings: Array.isArray(jsonObject.data?.alternate_greetings) ? jsonObject.data.alternate_greetings : [],
+                            group_only_greetings: Array.isArray(jsonObject.data?.group_only_greetings) ? jsonObject.data.group_only_greetings : (Array.isArray(jsonObject.group_only_greetings) ? jsonObject.group_only_greetings : []),
+                            extensions: jsonObject.data?.extensions || {},
+                            modification_date: nowSecs,
+                        },
+                    };
+                    if (jsonObject.data?.nickname || jsonObject.nickname) {
+                        v3Object.data.nickname = jsonObject.data?.nickname || jsonObject.nickname;
+                    }
+                    if (jsonObject.data?.creator_notes_multilingual || jsonObject.creator_notes_multilingual) {
+                        v3Object.data.creator_notes_multilingual = jsonObject.data?.creator_notes_multilingual || jsonObject.creator_notes_multilingual;
+                    }
+                    if (jsonObject.data?.source || jsonObject.source) {
+                        v3Object.data.source = jsonObject.data?.source || jsonObject.source;
+                    }
+                    if (jsonObject.data?.creation_date || jsonObject.creation_date) {
+                        v3Object.data.creation_date = jsonObject.data?.creation_date || jsonObject.creation_date;
+                    } else {
+                        v3Object.data.creation_date = nowSecs;
+                    }
+                    if (jsonObject.data?.assets || jsonObject.assets) {
+                        v3Object.data.assets = jsonObject.data?.assets || jsonObject.assets;
+                    }
+                    if (jsonObject.data?.character_book) {
+                        v3Object.data.character_book = jsonObject.data.character_book;
+                    }
+                    return response.type('json').send(JSON.stringify(v3Object, null, 4));
+                } catch {
+                    return response.sendStatus(400);
+                }
+            }
         }
 
         return response.sendStatus(400);
     } catch (err) {
         console.error('Character export failed', err);
         response.sendStatus(500);
+    }
+});
+
+router.post('/upgrade-v3', async function (request, response) {
+    try {
+        const avatars = Array.isArray(request.body.avatar_urls)
+            ? request.body.avatar_urls
+            : (request.body.avatar_url ? [request.body.avatar_url] : []);
+
+        if (avatars.length === 0) {
+            return response.status(400).send('No avatar URLs provided');
+        }
+
+        const updated = [];
+        for (const avatar of avatars) {
+            const filename = path.join(request.user.directories.characters, sanitize(avatar));
+            if (!fs.existsSync(filename)) continue;
+
+            const raw = await readCharacterData(filename);
+            if (!raw) continue;
+
+            const charObj = getCharaCardV2(JSON.parse(raw), request.user.directories);
+            const nowSecs = Math.floor(Date.now() / 1000);
+
+            const v3Data = {
+                ...charObj.data,
+                name: charObj.name || charObj.data?.name || '',
+                description: charObj.description || charObj.data?.description || '',
+                personality: charObj.personality || charObj.data?.personality || '',
+                scenario: charObj.scenario || charObj.data?.scenario || '',
+                first_mes: charObj.first_mes || charObj.data?.first_mes || '',
+                mes_example: charObj.mes_example || charObj.data?.mes_example || '',
+                creator_notes: charObj.data?.creator_notes ?? charObj.creatorcomment ?? '',
+                tags: Array.isArray(charObj.tags) ? charObj.tags : (Array.isArray(charObj.data?.tags) ? charObj.data.tags : []),
+                system_prompt: charObj.data?.system_prompt ?? '',
+                post_history_instructions: charObj.data?.post_history_instructions ?? '',
+                creator: charObj.creator || charObj.data?.creator || '',
+                character_version: charObj.character_version || charObj.data?.character_version || '1.0',
+                alternate_greetings: Array.isArray(charObj.data?.alternate_greetings) ? charObj.data.alternate_greetings : [],
+                group_only_greetings: Array.isArray(charObj.data?.group_only_greetings) ? charObj.data.group_only_greetings : (Array.isArray(charObj.group_only_greetings) ? charObj.group_only_greetings : []),
+                extensions: charObj.data?.extensions || {},
+                creation_date: charObj.data?.creation_date || charObj.creation_date || nowSecs,
+                modification_date: nowSecs,
+            };
+
+            if (charObj.data?.nickname || charObj.nickname) {
+                v3Data.nickname = charObj.data?.nickname || charObj.nickname;
+            }
+            if (charObj.data?.creator_notes_multilingual || charObj.creator_notes_multilingual) {
+                v3Data.creator_notes_multilingual = charObj.data?.creator_notes_multilingual || charObj.creator_notes_multilingual;
+            }
+            if (charObj.data?.source || charObj.source) {
+                v3Data.source = charObj.data?.source || charObj.source;
+            }
+            if (charObj.data?.assets || charObj.assets) {
+                v3Data.assets = charObj.data?.assets || charObj.assets;
+            }
+            if (charObj.data?.character_book) {
+                v3Data.character_book = charObj.data.character_book;
+            }
+
+            const v3Card = {
+                spec: 'chara_card_v3',
+                spec_version: '3.0',
+                data: v3Data,
+            };
+
+            const targetFile = avatar.replace(/\.png$/i, '');
+            await writeCharacterData(filename, JSON.stringify(v3Card), targetFile, request);
+            updated.push(avatar);
+        }
+
+        return response.json({ success: true, count: updated.length, updated });
+    } catch (err) {
+        console.error('Failed to upgrade character(s) to CCv3:', err);
+        return response.sendStatus(500);
     }
 });
 

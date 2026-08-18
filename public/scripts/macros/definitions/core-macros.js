@@ -299,29 +299,31 @@ export function registerCoreMacros() {
     });
 
     // Time and date macros
-    // Dice roll macro: {{roll 1d6}} or {{roll: 1d6}}
+    // Dice roll macro: {{roll 1d6}} or {{roll: 1d6}} or {{roll:d6}}
     MacroRegistry.registerMacro('roll', {
         category: MacroCategory.RANDOM,
         unnamedArgs: [
             {
                 name: 'formula',
                 sampleValue: '1d20',
-                description: 'Dice roll formula using droll syntax (e.g. 1d20).',
+                description: 'Dice roll formula using droll syntax (e.g. 1d20, 6, d6).',
                 type: 'string',
             },
         ],
-        description: 'Rolls dice using droll syntax (e.g. {{roll 1d20}}).',
+        description: 'Rolls dice using droll syntax (e.g. {{roll 1d20}}, {{roll::6}}, {{roll::d6}}).',
         returns: 'Dice roll result.',
         returnType: MacroValueType.INTEGER,
         exampleUsage: [
             '{{roll::1d20}}',
             '{{roll::6}}',
+            '{{roll::d6}}',
             '{{roll::3d6+4}}',
         ],
         handler: ({ unnamedArgs: [formula], warn }) => {
-            // If only digits were provided, treat it as `1dX`.
-            if (/^\d+$/.test(formula)) {
-                formula = `1d${formula}`;
+            if (!formula) return '';
+            // If only digits or dX was provided, treat it as `1dX`.
+            if (/^d?\d+$/i.test(formula)) {
+                formula = `1d${formula.replace(/^d/i, '')}`;
             }
 
             const isValid = droll.validate(formula);
@@ -336,6 +338,72 @@ export function registerCoreMacros() {
         },
     });
 
+    // Reverse string macro: {{reverse::text}} or {{reverse:text}}
+    MacroRegistry.registerMacro('reverse', {
+        category: MacroCategory.UTILITY,
+        unnamedArgs: [
+            {
+                name: 'text',
+                sampleValue: 'text',
+                description: 'Text to reverse.',
+                type: 'string',
+            },
+        ],
+        description: 'Reverses the provided text string (e.g. {{reverse::Hello}} -> olleH).',
+        returns: 'Reversed text string.',
+        exampleUsage: ['{{reverse::Hello}}'],
+        handler: ({ unnamedArgs: [text] }) => {
+            if (!text) return '';
+            return Array.from(text).reverse().join('');
+        },
+    });
+
+    // CCv3 Comment macro: {{// comment}}
+    MacroRegistry.registerMacro('//', {
+        category: MacroCategory.UTILITY,
+        unnamedArgs: [
+            {
+                name: 'comment',
+                optional: true,
+                description: 'Comment text to discard.',
+                type: 'string',
+            },
+        ],
+        description: 'Comment macro that produces an empty string in prompt and UI output.',
+        returns: '',
+        handler: () => '',
+    });
+
+    // CCv3 Hidden key macro: {{hidden_key::key}}
+    MacroRegistry.registerMacro('hidden_key', {
+        category: MacroCategory.UTILITY,
+        unnamedArgs: [
+            {
+                name: 'key',
+                description: 'Hidden key for recursive lorebook scanning.',
+                type: 'string',
+            },
+        ],
+        description: 'Produces an empty string in the prompt while preserving the key for recursive lorebook scanning.',
+        returns: '',
+        handler: () => '',
+    });
+
+    // CCv3 Comment macro: {{comment::note}}
+    MacroRegistry.registerMacro('comment', {
+        category: MacroCategory.UTILITY,
+        unnamedArgs: [
+            {
+                name: 'text',
+                description: 'Comment text.',
+                type: 'string',
+            },
+        ],
+        description: 'Produces an empty string in the prompt when evaluated.',
+        returns: '',
+        handler: () => '',
+    });
+
     // Random choice macro: {{random::a::b}} or {{random a,b}}
     MacroRegistry.registerMacro('random', {
         category: MacroCategory.RANDOM,
@@ -344,18 +412,23 @@ export function registerCoreMacros() {
         returns: 'Randomly selected item from the list.',
         exampleUsage: ['{{random::blonde::brown::red::black::blue}}'],
         handler: ({ list }) => {
-            // Handle old legacy cases, where we have to split the list manually
-            if (list.length === 1) {
-                list = readSingleArgsRandomList(list[0]);
+            if (!list || !list.length) {
+                return '';
             }
 
-            if (list.length === 0) {
+            let items = list;
+            // Handle old legacy cases, where we have to split the list manually
+            if (items.length === 1) {
+                items = readSingleArgsRandomList(items[0]);
+            }
+
+            if (items.length === 0) {
                 return '';
             }
 
             const rng = seedrandom('added entropy.', { entropy: true });
-            const randomIndex = Math.floor(rng() * list.length);
-            return list[randomIndex];
+            const randomIndex = Math.floor(rng() * items.length);
+            return items[randomIndex];
         },
     });
 
@@ -372,12 +445,17 @@ export function registerCoreMacros() {
         returns: 'Stable randomly selected item from the list.',
         exampleUsage: ['{{pick::blonde::brown::red::black::blue}}'],
         handler: ({ list, globalOffset, env }) => {
-            // Handle old legacy cases, where we have to split the list manually
-            if (list.length === 1) {
-                list = readSingleArgsRandomList(list[0]);
+            if (!list || !list.length) {
+                return '';
             }
 
-            if (!list.length) {
+            let items = list;
+            // Handle old legacy cases, where we have to split the list manually
+            if (items.length === 1) {
+                items = readSingleArgsRandomList(items[0]);
+            }
+
+            if (!items.length) {
                 return '';
             }
 
@@ -401,8 +479,8 @@ export function registerCoreMacros() {
             const combinedSeedString = [chatIdHash, rawContentHash, offset, rerollSeed].filter(it => it !== null).join('-');
             const finalSeed = getStringHash(combinedSeedString);
             const rng = seedrandom(String(finalSeed));
-            const randomIndex = Math.floor(rng() * list.length);
-            return list[randomIndex];
+            const randomIndex = Math.floor(rng() * items.length);
+            return items[randomIndex];
         },
     });
 

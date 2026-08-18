@@ -32,16 +32,19 @@ export class TavernCardValidator {
     validate() {
         this.#lastValidationError = null;
 
-        if (this.validateV1()) {
-            return 1;
+        if (this.validateV3()) {
+            this.#lastValidationError = null;
+            return 3;
         }
 
         if (this.validateV2()) {
+            this.#lastValidationError = null;
             return 2;
         }
 
-        if (this.validateV3()) {
-            return 3;
+        if (this.validateV1()) {
+            this.#lastValidationError = null;
+            return 1;
         }
 
         return false;
@@ -82,7 +85,8 @@ export class TavernCardValidator {
     validateV3() {
         return this.#validateSpecV3()
             && this.#validateSpecVersionV3()
-            && this.#validateDataV3();
+            && this.#validateDataV3()
+            && this.#validateCharacterBookV3();
     }
 
     #validateSpecV2() {
@@ -149,7 +153,8 @@ export class TavernCardValidator {
     }
 
     #validateSpecVersionV3() {
-        if (Number(this.card.spec_version) < 3.0 || Number(this.card.spec_version) >= 4.0) {
+        const versionNum = parseFloat(String(this.card.spec_version));
+        if (isNaN(versionNum) || versionNum < 3.0 || versionNum >= 4.0) {
             this.#lastValidationError = 'spec_version';
             return false;
         }
@@ -164,6 +169,47 @@ export class TavernCardValidator {
             return false;
         }
 
+        if (Object.hasOwn(data, 'alternate_greetings') && !Array.isArray(data.alternate_greetings)) {
+            this.#lastValidationError = 'data.alternate_greetings';
+            return false;
+        }
+
+        if (Object.hasOwn(data, 'group_only_greetings') && !Array.isArray(data.group_only_greetings)) {
+            this.#lastValidationError = 'data.group_only_greetings';
+            return false;
+        }
+
+        if (Object.hasOwn(data, 'tags') && !Array.isArray(data.tags)) {
+            this.#lastValidationError = 'data.tags';
+            return false;
+        }
+
+        if (Object.hasOwn(data, 'assets') && !Array.isArray(data.assets)) {
+            this.#lastValidationError = 'data.assets';
+            return false;
+        }
+
+        return true;
+    }
+
+    #validateCharacterBookV3() {
+        const characterBook = this.card.data?.character_book;
+
+        if (!characterBook) {
+            return true;
+        }
+
+        if (typeof characterBook !== 'object') {
+            this.#lastValidationError = 'data.character_book';
+            return false;
+        }
+
+        if (Object.hasOwn(characterBook, 'entries') && !Array.isArray(characterBook.entries)) {
+            this.#lastValidationError = 'data.character_book.entries';
+            return false;
+        }
+
         return true;
     }
 }
+

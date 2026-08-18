@@ -1,4 +1,4 @@
-import { name1, name2, characters, getCharacterCardFieldsLazy, getGeneratingModel } from '../../../script.js';
+import { name1, name2, characters, this_chid, getCharacterCardFieldsLazy, getGeneratingModel } from '../../../script.js';
 import { groups, selected_group } from '../../../scripts/group-chats.js';
 import { logMacroGeneralError } from './MacroDiagnostics.js';
 import { getStringHash } from '/scripts/utils.js';
@@ -130,8 +130,10 @@ class MacroEnvBuilder {
         }
 
         // Names
-        env.names.user = ctx.name1Override ?? name1 ?? '';
-        env.names.char = ctx.name2Override ?? name2 ?? '';
+        const activeChar = characters[this_chid];
+        const defaultChar = (activeChar?.data?.nickname?.trim() || activeChar?.nickname?.trim() || name2) ?? '';
+        env.names.user = (ctx.name1Override ?? name1) ?? '';
+        env.names.char = ctx.name2Override ?? defaultChar;
         env.names.group = getGroupValue(ctx, { currentChar: env.names.char, includeMuted: true });
         env.names.groupNotMuted = getGroupValue(ctx, { currentChar: env.names.char, includeMuted: false });
         env.names.notChar = getGroupValue(ctx, { currentChar: env.names.char, filterOutChar: true, includeUser: env.names.user });

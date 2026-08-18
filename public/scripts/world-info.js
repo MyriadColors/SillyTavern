@@ -97,7 +97,28 @@ export const DEFAULT_DEPTH = 4;
 export const DEFAULT_WEIGHT = 100;
 export const MAX_SCAN_DEPTH = 1000;
 const MAX_COMMENT_LENGTH = 100;
-const KNOWN_DECORATORS = ['@@activate', '@@dont_activate'];
+const KNOWN_DECORATORS = [
+    '@@activate',
+    '@@dont_activate',
+    '@@activate_only_after',
+    '@@activate_only_every',
+    '@@keep_activate_after_match',
+    '@@dont_activate_after_match',
+    '@@depth',
+    '@@instruct_depth',
+    '@@reverse_depth',
+    '@@reverse_instruct_depth',
+    '@@role',
+    '@@scan_depth',
+    '@@instruct_scan_depth',
+    '@@is_greeting',
+    '@@position',
+    '@@ignore_on_max_context',
+    '@@additional_keys',
+    '@@exclude_keys',
+    '@@is_user_icon',
+    '@@disable_ui_prompt',
+];
 
 // Typedef area
 /**
@@ -335,6 +356,20 @@ class WorldInfoBuffer {
      * @returns {boolean} True if the string was found in the buffer
      */
     matchKeys(haystack, needle, entry) {
+        if (!needle || typeof needle !== 'string') return false;
+
+        // If the entry specifies use_regex or needle is a regex string, evaluate as regex
+        if (entry.use_regex || entry.useRegex) {
+            try {
+                if (needle.length > 2000) return false;
+                const flags = entry.case_sensitive || entry.caseSensitive ? '' : 'i';
+                const keyRegex = parseRegexFromString(needle) || new RegExp(needle, flags);
+                return keyRegex.test(haystack);
+            } catch {
+                return false;
+            }
+        }
+
         // If the needle is a regex, we do regex pattern matching and override all the other options
         const keyRegex = parseRegexFromString(needle);
         if (keyRegex) {
@@ -4883,6 +4918,71 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                 continue;
             }
 
+            // CCv3 Decorator: @@activate_only_after N
+            const activateOnlyAfterDec = entry.decorators.find(d => d.startsWith('@@activate_only_after'));
+            if (activateOnlyAfterDec) {
+                const match = activateOnlyAfterDec.match(/@@activate_only_after\s+(\d+)/);
+                if (match) {
+                    const minMessages = parseInt(match[1], 10);
+                    if (chat.length < minMessages) {
+                        log(`suppressed by @@activate_only_after: need ${minMessages}, got ${chat.length}`);
+                        continue;
+                    }
+                }
+            }
+
+            // CCv3 Decorator: @@activate_only_every N
+            const activateOnlyEveryDec = entry.decorators.find(d => d.startsWith('@@activate_only_every'));
+            if (activateOnlyEveryDec) {
+                const match = activateOnlyEveryDec.match(/@@activate_only_every\s+(\d+)/);
+                if (match) {
+                    const interval = parseInt(match[1], 10);
+                    if (interval > 0 && (chat.length % interval !== 0)) {
+                        log(`suppressed by @@activate_only_every ${interval}: current count ${chat.length}`);
+                        continue;
+                    }
+                }
+            }
+
+            // CCv3 Decorator: @@is_greeting N
+            const isGreetingDec = entry.decorators.find(d => d.startsWith('@@is_greeting'));
+            if (isGreetingDec) {
+                const match = isGreetingDec.match(/@@is_greeting\s+(\d+)/);
+                if (match) {
+                    const expectedGreetingIndex = parseInt(match[1], 10);
+                    const currentGreetingIndex = typeof chat_metadata.greeting_index === 'number' ? chat_metadata.greeting_index : 0;
+                    if (currentGreetingIndex !== expectedGreetingIndex) {
+                        log(`suppressed by @@is_greeting ${expectedGreetingIndex}: current is ${currentGreetingIndex}`);
+                        continue;
+                    }
+                }
+            }
+
+            // Apply CCv3 overriding decorators
+            const depthDec = entry.decorators.find(d => d.startsWith('@@depth') || d.startsWith('@@instruct_depth'));
+            if (depthDec) {
+                const match = depthDec.match(/@@(?:depth|instruct_depth)\s+(-?\d+)/);
+                if (match) {
+                    entry.depth = parseInt(match[1], 10);
+                }
+            }
+
+            const positionDec = entry.decorators.find(d => d.startsWith('@@position'));
+            if (positionDec) {
+                const match = positionDec.match(/@@position\s+["']?([^"'\s]+)["']?/);
+                if (match) {
+                    entry.position = match[1];
+                }
+            }
+
+            const roleDec = entry.decorators.find(d => d.startsWith('@@role'));
+            if (roleDec) {
+                const match = roleDec.match(/@@role\s+["']?([^"'\s]+)["']?/);
+                if (match) {
+                    entry.role = match[1];
+                }
+            }
+
             if (buffer.getExternallyActivated(entry)) {
                 log('externally activated');
                 activatedNow.add(buffer.getExternallyActivated(entry));
@@ -4909,6 +5009,28 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
 
             // Cache the text to scan before the loop, it won't change its content
             const textToScan = buffer.get(entry, scanState);
+
+            // CCv3 Decorator: @@exclude_keys
+            const excludeKeysDec = entry.decorators.find(d => d.startsWith('@@exclude_keys'));
+            if (excludeKeysDec) {
+                const rawKeys = excludeKeysDec.replace(/^@@exclude_keys\s+/, '').split(',').map(k => k.trim()).filter(Boolean);
+                const excluded = rawKeys.some(k => buffer.matchKeys(textToScan, substituteParams(k) || k, entry));
+                if (excluded) {
+                    log('suppressed by @@exclude_keys match');
+                    continue;
+                }
+            }
+
+            // CCv3 Decorator: @@additional_keys
+            const additionalKeysDec = entry.decorators.find(d => d.startsWith('@@additional_keys'));
+            if (additionalKeysDec) {
+                const rawKeys = additionalKeysDec.replace(/^@@additional_keys\s+/, '').split(',').map(k => k.trim()).filter(Boolean);
+                const allMatched = rawKeys.every(k => buffer.matchKeys(textToScan, substituteParams(k) || k, entry));
+                if (!allMatched) {
+                    log('suppressed by @@additional_keys failure');
+                    continue;
+                }
+            }
 
             // PRIMARY KEYWORDS
             let primaryKeyMatch = entry.key.find(key => {

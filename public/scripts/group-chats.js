@@ -578,8 +578,16 @@ export function getGroupCharacterCardsLazy(groupId, characterId) {
 async function getFirstCharacterMessage(character) {
     let messageText = character.first_mes;
 
-    // if there are alternate greetings, pick one at random
-    if (Array.isArray(character.data?.alternate_greetings)) {
+    const groupOnlyGreetings = Array.isArray(character.data?.group_only_greetings) && character.data.group_only_greetings.length > 0
+        ? character.data.group_only_greetings
+        : (Array.isArray(character.group_only_greetings) && character.group_only_greetings.length > 0 ? character.group_only_greetings : null);
+
+    if (groupOnlyGreetings) {
+        const messageTexts = groupOnlyGreetings.filter(x => x);
+        if (messageTexts.length > 0) {
+            messageText = messageTexts[Math.floor(Math.random() * messageTexts.length)];
+        }
+    } else if (Array.isArray(character.data?.alternate_greetings)) {
         const messageTexts = [character.first_mes, ...character.data.alternate_greetings].filter(x => x);
         messageText = messageTexts[Math.floor(Math.random() * messageTexts.length)];
     }
@@ -591,6 +599,7 @@ async function getFirstCharacterMessage(character) {
         messageText = eventArgs.output;
     }
 
+    const resolvedCharName = character.data?.nickname?.trim() || character.nickname?.trim() || character.name;
     const mes = {};
     mes.is_user = false;
     mes.is_system = false;
@@ -599,7 +608,7 @@ async function getFirstCharacterMessage(character) {
     mes.original_avatar = character.avatar;
     mes.extra = { 'gen_id': Date.now() * Math.random() * 1000000 };
     mes.mes = messageText
-        ? substituteParams(messageText.trim(), { name2Override: character.name })
+        ? substituteParams(messageText.trim(), { name2Override: resolvedCharName })
         : '';
     mes.force_avatar =
         character.avatar != 'none'

@@ -58,6 +58,7 @@
             <li><button id="character_context_menu_duplicate" data-i18n="Duplicate">Duplicate</button></li>
             <li><button id="character_context_menu_persona" data-i18n="Persona">Persona</button></li>
             <li><button id="character_context_menu_dedupe" data-i18n="Find Duplicates...">Find Duplicates...</button></li>
+            <li><button id="character_context_menu_upgrade_v3" data-i18n="Upgrade to CCv3">Upgrade to CCv3</button></li>
             <li><button id="character_context_menu_delete" data-i18n="Delete">Delete</button></li>
         </ul>
     </div>
@@ -6089,6 +6090,9 @@
                                         <span data-i18n="extension_token_counter">Tokens:</span> <span data-token-counter="character_name_pole" data-token-permanent="true">counting...</span>
                                     </div>
                                 </div>
+                                <div id="nickname_div">
+                                    <input id="character_nickname_pole" name="nickname" class="text_pole" data-i18n="[placeholder]Nickname (Optional, overrides {{char}} in prompts)" placeholder="Nickname (Optional, overrides {{char}} in prompts)" value="" autocomplete="off">
+                                </div>
                                 <div class="flex-container flexFlowColumn expander flexNoGap">
                                     <div id="avatar_div" class="avatar_div buttons_block alignitemsflexstart justifySpaceBetween flexnowrap">
                                         <label id="avatar_div_div" class="add_avatar avatar" for="add_avatar_button" title="Click to select a new avatar for this character" data-i18n="[title]Click to select a new avatar for this character">
@@ -6138,6 +6142,9 @@
                                                     </option>
                                                     <option id="replace_update" data-i18n="Update / Replace Card">
                                                         Update / Replace Card
+                                                    </option>
+                                                    <option id="upgrade_to_ccv3" data-i18n="Upgrade Card to CCv3">
+                                                        Upgrade Card to CCv3
                                                     </option>
                                                     <option id="find_duplicates" data-i18n="Find Duplicates...">
                                                         Find Duplicates...
@@ -6454,7 +6461,8 @@
         <template id="NULL_SELECTOR" class="displayNone"></template>
         <div id="export_format_popup" class="list-group">
             <div class="export_format list-group-item" data-format="png">PNG</div>
-            <div class="export_format list-group-item" data-format="json">JSON</div>
+            <div class="export_format list-group-item" data-format="json">JSON (V2)</div>
+            <div class="export_format list-group-item" data-format="json_v3">JSON (CCv3)</div>
         </div>
         <div id="zoomed_avatar_template" class="template_element">
             <div class="zoomed_avatar">

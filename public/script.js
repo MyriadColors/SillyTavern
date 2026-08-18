@@ -628,6 +628,17 @@ export let swipesHidden = false;
 export let lastSwipeInfo = { now: performance.now(), direction: SWIPE_DIRECTION.RIGHT };
 export let recentSwipes = 0;
 
+/**
+ * @typedef {Object} ExtensionPrompt
+ * @property {string} value Prompt text
+ * @property {number} [position] Insertion position
+ * @property {number} [depth] Depth for depth injection
+ * @property {boolean} [scan] Should prompt be included in WI scan
+ * @property {number} [role] Extension prompt role
+ * @property {(function(): Promise<boolean>|boolean)|null} [filter] Filter function
+ */
+
+/** @type {Record<string, ExtensionPrompt>} */
 export let extension_prompts = {};
 
 export let main_api;// = "kobold";
@@ -2936,8 +2947,10 @@ export function substituteParamsLegacy(content, _name1, _name2, _original, _grou
     }
 
     // Must be substituted last so that they're replaced inside {{description}}
+    const activeChar = characters[this_chid];
+    const resolvedCharName = _name2 ?? (activeChar?.data?.nickname?.trim() || activeChar?.nickname?.trim() || name2);
     environment.user = _name1 ?? name1;
-    environment.char = _name2 ?? name2;
+    environment.char = resolvedCharName;
     environment.group = environment.charIfNotGroup = getGroupValue(true);
     environment.groupNotMuted = getGroupValue(false);
     environment.notChar = getNotCharValue();
@@ -3440,6 +3453,11 @@ export function getCharacterCardFieldsLazy({ chid = undefined } = {}) {
             if (!character) return '';
             const exampleDialog = chat_metadata.mes_example || character.mes_example || '';
             return baseChatReplace(exampleDialog.trim());
+        },
+        nickname: () => {
+            if (!character) return '';
+            const nick = character.data?.nickname || character.nickname || '';
+            return baseChatReplace(nick.trim());
         },
         firstMessage: () => {
             if (!character) return '';
@@ -8777,6 +8795,7 @@ export function select_selected_character(chid, { switchMenu = true } = {}) {
 
     $('#character_popup-button-h3').text(characters[chid].name);
     $('#character_name_pole').val(characters[chid].name);
+    $('#character_nickname_pole').val(characters[chid].data?.nickname || characters[chid].nickname || '');
     $('#description_textarea').val(characters[chid].description);
     $('#character_world').val(characters[chid].data?.extensions?.world || '');
     $('#creator_notes_textarea').val(characters[chid].data?.creator_notes || characters[chid].creatorcomment);
@@ -8863,6 +8882,7 @@ function select_rm_create({ switchMenu = true } = {}) {
     $('#character_import_button').css('display', '');
     $('#character_popup-button-h3').text('Create character');
     $('#character_name_pole').val(create_save.name);
+    $('#character_nickname_pole').val(create_save.nickname || '');
     $('#description_textarea').val(create_save.description);
     $('#character_world').val(create_save.world);
     $('#creator_notes_textarea').val(create_save.creator_notes);
@@ -9795,6 +9815,7 @@ export async function createOrEditCharacter(e) {
             $('#character_cross').trigger('click'); //closes the advanced character editing popup
             const fields = [
                 { id: '#character_name_pole', callback: value => create_save.name = value },
+                { id: '#character_nickname_pole', callback: value => create_save.nickname = value },
                 { id: '#description_textarea', callback: value => create_save.description = value },
                 { id: '#creator_notes_textarea', callback: value => create_save.creator_notes = value },
                 { id: '#character_version_textarea', callback: value => create_save.character_version = value },
@@ -12094,7 +12115,9 @@ jQuery(async function () {
         });
 
         if (response.ok) {
-            const filename = characters[this_chid].avatar.replace('.png', `.${format}`);
+            const ext = format === 'json_v3' || format === 'v3' ? 'json' : format;
+            const suffix = format === 'json_v3' || format === 'v3' ? '_v3' : '';
+            const filename = characters[this_chid].avatar.replace('.png', `${suffix}.${ext}`);
             const blob = await response.blob();
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -12537,6 +12560,30 @@ jQuery(async function () {
             } break;
             case 'replace_update': {
                 await handleUpdateCardAction();
+            } break;
+            case 'upgrade_to_ccv3': {
+                if (this_chid === undefined || !characters[this_chid]) {
+                    toastr.warning(t`No character selected`);
+                    break;
+                }
+                const avatar = characters[this_chid].avatar;
+                try {
+                    const response = await fetch('/api/characters/upgrade-v3', {
+                        method: 'POST',
+                        headers: getRequestHeaders(),
+                        body: JSON.stringify({ avatar_url: avatar }),
+                    });
+                    if (response.ok) {
+                        toastr.success(t`Character successfully upgraded to CCv3!`);
+                        await getCharacters();
+                        await selectCharacterById(this_chid);
+                    } else {
+                        toastr.error(t`Failed to upgrade character to CCv3.`);
+                    }
+                } catch (error) {
+                    console.error('Error upgrading character to CCv3:', error);
+                    toastr.error(t`An error occurred during CCv3 upgrade.`);
+                }
             } break;
             case 'find_duplicates': {
                 await CardDeduperManager.openDeduperDialog();
