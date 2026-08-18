@@ -64,7 +64,70 @@ export class CardUpdateManager {
     }
 
     /**
-     * Searches for a matching character in the library.
+     * Extracts normalized core definition text from a card for similarity comparison.
+     * @param {object} card Character card object
+     * @returns {string}
+     */
+    static getCardCoreText(card) {
+        if (!card || typeof card !== 'object') return '';
+        const data = card.data || card;
+        return [
+            (data.description || '').trim(),
+            (data.personality || '').trim(),
+            (data.scenario || '').trim(),
+            (data.first_mes || '').trim(),
+            (data.mes_example || '').trim(),
+            (data.system_prompt || '').trim(),
+        ].filter(Boolean).join('\n---\n');
+    }
+
+    /**
+     * Calculates Dice coefficient similarity between two strings using bigrams.
+     * @param {string} textA First text
+     * @param {string} textB Second text
+     * @returns {number} Value between 0.0 and 1.0
+     */
+    static calculateSimilarity(textA, textB) {
+        if (!textA || !textB) return 0;
+        const cleanA = textA.toLowerCase().replace(/\s+/g, ' ').trim();
+        const cleanB = textB.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (cleanA === cleanB) return 1;
+        if (cleanA.length < 2 || cleanB.length < 2) return 0;
+
+        const bigramsA = new Map();
+        for (let i = 0; i < cleanA.length - 1; i++) {
+            const bigram = cleanA.substring(i, i + 2);
+            bigramsA.set(bigram, (bigramsA.get(bigram) || 0) + 1);
+        }
+
+        let intersection = 0;
+        for (let i = 0; i < cleanB.length - 1; i++) {
+            const bigram = cleanB.substring(i, i + 2);
+            const count = bigramsA.get(bigram) || 0;
+            if (count > 0) {
+                intersection++;
+                bigramsA.set(bigram, count - 1);
+            }
+        }
+
+        const totalBigrams = (cleanA.length - 1) + (cleanB.length - 1);
+        return (2 * intersection) / totalBigrams;
+    }
+
+    /**
+     * Extracts creator name from a card object.
+     * @param {object} card Character card object
+     * @returns {string}
+     */
+    static getCardCreator(card) {
+        if (!card || typeof card !== 'object') return '';
+        const data = card.data || card;
+        return String(data.creator || card.creator || '').trim();
+    }
+
+    /**
+     * Searches for a matching character in the library using multi-factor identity checks.
+     * Prevents false positive collisions for different cards that happen to share a common name.
      * @param {object} cardData Parsed card object
      * @param {string} [fileName] Original file name
      * @returns {number} Index in characters[] or -1
@@ -74,33 +137,81 @@ export class CardUpdateManager {
             return -1;
         }
 
-        const rawName = cardData?.data?.name || cardData?.name || '';
-        const cleanName = String(rawName).trim().toLowerCase();
+        const incomingData = cardData?.data || cardData || {};
+        const incomingName = String(incomingData.name || cardData?.name || '').trim().toLowerCase();
+        const incomingCreator = this.getCardCreator(cardData).toLowerCase();
+        const incomingText = this.getCardCoreText(cardData);
         const baseFileName = String(fileName).replace(/\.[^/.]+$/, '').trim().toLowerCase();
 
-        // 1. Match by exact avatar file name if provided
-        if (baseFileName) {
-            const avatarMatch = characters.findIndex(c => {
-                const cAvatarBase = String(c.avatar).replace(/\.[^/.]+$/, '').toLowerCase();
-                return cAvatarBase === baseFileName;
-            });
-            if (avatarMatch !== -1) return avatarMatch;
-        }
-
-        // 2. Match by character display name
-        if (cleanName) {
-            const nameMatch = characters.findIndex(c => {
-                const cName = String(c.name || '').trim().toLowerCase();
-                return cName === cleanName;
-            });
-            if (nameMatch !== -1) return nameMatch;
-        }
-
-        // 3. Match by Chub full_path or source_url if available
-        const incomingChubPath = cardData?.data?.extensions?.chub?.full_path;
+        // 1. Upstream Global IDs (Strongest Identity)
+        const incomingChubPath = incomingData.extensions?.chub?.full_path;
         if (incomingChubPath) {
             const chubMatch = characters.findIndex(c => c?.data?.extensions?.chub?.full_path === incomingChubPath);
             if (chubMatch !== -1) return chubMatch;
+        }
+
+        const incomingChubId = incomingData.extensions?.chub?.id;
+        if (incomingChubId !== undefined && incomingChubId !== null && incomingChubId !== '') {
+            const chubIdMatch = characters.findIndex(c => c?.data?.extensions?.chub?.id === incomingChubId);
+            if (chubIdMatch !== -1) return chubIdMatch;
+        }
+
+        const incomingV3Id = incomingData.id || cardData?.id;
+        if (incomingV3Id) {
+            const v3Match = characters.findIndex(c => (c?.data?.id && c.data.id === incomingV3Id) || (c?.id && c.id === incomingV3Id));
+            if (v3Match !== -1) return v3Match;
+        }
+
+        const incomingSourceUrl = incomingData.extensions?.source_url || incomingData.extensions?.character_id;
+        if (incomingSourceUrl) {
+            const srcMatch = characters.findIndex(c => {
+                const cSrc = c?.data?.extensions?.source_url || c?.data?.extensions?.character_id;
+                return cSrc && cSrc === incomingSourceUrl;
+            });
+            if (srcMatch !== -1) return srcMatch;
+        }
+
+        // 2. Exact Definition Content Match (Identical character definition)
+        if (incomingText) {
+            const exactContentMatch = characters.findIndex(c => {
+                const cText = this.getCardCoreText(c);
+                return cText && cText.toLowerCase() === incomingText.toLowerCase();
+            });
+            if (exactContentMatch !== -1) return exactContentMatch;
+        }
+
+        // 3. Match by Base Filename or Display Name guarded by Creator or Semantic Similarity
+        const candidateIndices = [];
+        characters.forEach((c, idx) => {
+            const cAvatarBase = String(c.avatar || '').replace(/\.[^/.]+$/, '').trim().toLowerCase();
+            const cName = String(c.name || c.data?.name || '').trim().toLowerCase();
+            if ((baseFileName && cAvatarBase === baseFileName) || (incomingName && cName === incomingName)) {
+                candidateIndices.push(idx);
+            }
+        });
+
+        for (const idx of candidateIndices) {
+            const candidate = characters[idx];
+            const candidateCreator = this.getCardCreator(candidate).toLowerCase();
+            const candidateText = this.getCardCoreText(candidate);
+            const simScore = this.calculateSimilarity(incomingText, candidateText);
+
+            // If creators are specified on both and differ, they are different cards by different authors
+            if (incomingCreator && candidateCreator && incomingCreator !== candidateCreator) {
+                continue;
+            }
+
+            // Same creator: moderate similarity (>= 0.4) indicates a card update/variant
+            if (incomingCreator && candidateCreator && incomingCreator === candidateCreator) {
+                if (simScore >= 0.4 || (baseFileName && String(candidate.avatar).replace(/\.[^/.]+$/, '').toLowerCase() === baseFileName)) {
+                    return idx;
+                }
+            }
+
+            // Creator not specified on one or both: require high content similarity (>= 0.75)
+            if (simScore >= 0.75) {
+                return idx;
+            }
         }
 
         return -1;

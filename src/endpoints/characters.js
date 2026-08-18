@@ -1973,14 +1973,23 @@ router.post('/dedupe/scan', async function (request, response) {
                 const internalName = path.parse(avatar).name;
                 const stats = await getCharacterChatStats(request.user.directories, internalName);
 
+                const chubPath = data.extensions?.chub?.full_path || '';
+                const chubId = data.extensions?.chub?.id !== undefined ? String(data.extensions.chub.id) : '';
+                const v3Id = data.id || card.id || '';
+                const sourceUrl = data.extensions?.source_url || data.extensions?.character_id || '';
+
                 cardRecords.push({
                     avatar,
                     name: data.name || internalName,
                     normalizedName: normalizeCharacterName(data.name || internalName),
                     character_version: data.character_version || '',
-                    creator: data.creator || '',
+                    creator: String(data.creator || card.creator || '').trim(),
                     creator_notes: data.creator_notes || data.creatorcomment || '',
                     contentHash: calculateContentHash(card),
+                    chubPath,
+                    chubId,
+                    v3Id,
+                    sourceUrl,
                     descriptionText: [data.description, data.personality, data.scenario].filter(Boolean).join(' '),
                     chatCount: stats.chatCount,
                     messageCount: stats.messageCount,
@@ -2026,18 +2035,47 @@ router.post('/dedupe/scan', async function (request, response) {
 
                 let matched = false;
 
-                if (matchTypes.includes('name') && a.normalizedName && a.normalizedName === b.normalizedName) {
+                // 1. Upstream Source ID Match (exact same upstream character)
+                if (
+                    (a.chubPath && b.chubPath && a.chubPath === b.chubPath) ||
+                    (a.chubId && b.chubId && a.chubId === b.chubId) ||
+                    (a.v3Id && b.v3Id && a.v3Id === b.v3Id) ||
+                    (a.sourceUrl && b.sourceUrl && a.sourceUrl === b.sourceUrl)
+                ) {
                     matched = true;
                 }
 
-                if (matchTypes.includes('hash') && a.contentHash && a.contentHash === b.contentHash) {
+                // 2. Exact Definition Content Hash Match
+                if (!matched && matchTypes.includes('hash') && a.contentHash && a.contentHash === b.contentHash) {
                     matched = true;
                 }
 
-                if (matchTypes.includes('fuzzy') && a.descriptionText && b.descriptionText) {
-                    const score = calculateSimilarityScore(a.descriptionText, b.descriptionText);
-                    if (score >= similarityThreshold) {
-                        matched = true;
+                // 3. If creators are both non-empty and differ, they are by different authors and not duplicates
+                const aCreator = a.creator.toLowerCase();
+                const bCreator = b.creator.toLowerCase();
+                const creatorsConflict = aCreator && bCreator && aCreator !== bCreator;
+
+                if (!matched && !creatorsConflict) {
+                    // 4. Guarded Name Match
+                    if (matchTypes.includes('name') && a.normalizedName && a.normalizedName === b.normalizedName) {
+                        const simScore = calculateSimilarityScore(a.descriptionText, b.descriptionText);
+                        if (aCreator && bCreator && aCreator === bCreator) {
+                            // Same creator + same normalized name: allow if text similarity is moderate (>= 0.35) or version differs
+                            if (simScore >= 0.35 || (a.character_version && b.character_version && a.character_version !== b.character_version)) {
+                                matched = true;
+                            }
+                        } else if (simScore >= similarityThreshold) {
+                            // Creator omitted on one/both: require high similarity to avoid false positive on common names
+                            matched = true;
+                        }
+                    }
+
+                    // 5. Fuzzy Description Similarity Match
+                    if (!matched && matchTypes.includes('fuzzy') && a.descriptionText && b.descriptionText) {
+                        const score = calculateSimilarityScore(a.descriptionText, b.descriptionText);
+                        if (score >= similarityThreshold) {
+                            matched = true;
+                        }
                     }
                 }
 

@@ -298,3 +298,143 @@ describe('CardUpdateManager.mergeCardData', () => {
         expect(merged.data.tags).toEqual(['friendly', 'fantasy', 'magic', 'adventure']);
     });
 });
+
+describe('CardUpdateManager Multi-Factor Identity Matching', () => {
+    let scriptMod;
+
+    beforeAll(async () => {
+        scriptMod = await import('../public/script.js');
+    });
+
+    test('calculateSimilarity accurately computes bigram Dice coefficient', () => {
+        const textA = 'A brave knight exploring dark ancient dungeons.';
+        const textB = 'A brave knight exploring dark ancient dungeons.';
+        expect(CardUpdateManager.calculateSimilarity(textA, textB)).toBe(1.0);
+
+        const textC = 'A courageous warrior venturing into mysterious dark ancient caverns.';
+        expect(CardUpdateManager.calculateSimilarity(textA, textC)).toBeGreaterThan(0.3);
+
+        const textD = 'Completely unrelated text about astronomical galaxies.';
+        expect(CardUpdateManager.calculateSimilarity(textA, textD)).toBeLessThan(0.25);
+    });
+
+    test('getCardCreator extracts creator from root or data object', () => {
+        expect(CardUpdateManager.getCardCreator({ creator: 'AuthorRoot' })).toBe('AuthorRoot');
+        expect(CardUpdateManager.getCardCreator({ data: { creator: 'AuthorData' } })).toBe('AuthorData');
+        expect(CardUpdateManager.getCardCreator({})).toBe('');
+    });
+
+    test('findMatchingCharacterIndex matches by upstream Chub path', () => {
+        const existing = makeBaseCharacter();
+        existing.data.extensions.chub = { full_path: 'creator/alice-the-knight' };
+        scriptMod.characters.length = 0;
+        scriptMod.characters.push(existing);
+
+        const incoming = {
+            data: {
+                name: 'Alice Updated',
+                extensions: { chub: { full_path: 'creator/alice-the-knight' } },
+            },
+        };
+
+        expect(CardUpdateManager.findMatchingCharacterIndex(incoming, 'alice.png')).toBe(0);
+    });
+
+    test('findMatchingCharacterIndex matches by CCv3 id', () => {
+        const existing = makeBaseCharacter();
+        existing.data.id = 'uuid-card-12345';
+        scriptMod.characters.length = 0;
+        scriptMod.characters.push(existing);
+
+        const incoming = {
+            data: {
+                name: 'Alice Renamed',
+                id: 'uuid-card-12345',
+            },
+        };
+
+        expect(CardUpdateManager.findMatchingCharacterIndex(incoming)).toBe(0);
+    });
+
+    test('findMatchingCharacterIndex matches exact content definition', () => {
+        const existing = makeBaseCharacter();
+        scriptMod.characters.length = 0;
+        scriptMod.characters.push(existing);
+
+        const incoming = {
+            name: 'Alice (Exact Duplicate File)',
+            data: {
+                description: 'Original description',
+                personality: 'Kind, gentle',
+                scenario: 'In a fantasy village',
+                first_mes: 'Hello there!',
+                mes_example: '<START>\n{{user}}: Hi\n{{char}}: Hello!',
+                system_prompt: 'You are Alice.',
+            },
+        };
+
+        expect(CardUpdateManager.findMatchingCharacterIndex(incoming, 'new_file.png')).toBe(0);
+    });
+
+    test('findMatchingCharacterIndex rejects same name when creators differ', () => {
+        const existing = makeBaseCharacter();
+        existing.data.creator = 'OriginalAuthor';
+        existing.creator = 'OriginalAuthor';
+        scriptMod.characters.length = 0;
+        scriptMod.characters.push(existing);
+
+        const incoming = {
+            data: {
+                name: 'Alice',
+                creator: 'DifferentAuthor',
+                description: 'A completely different modern cyberpunk Alice character.',
+                personality: 'Cynical, cold',
+            },
+        };
+
+        // Same name ('Alice'), but different creator -> must NOT match
+        expect(CardUpdateManager.findMatchingCharacterIndex(incoming, 'Alice.png')).toBe(-1);
+    });
+
+    test('findMatchingCharacterIndex rejects same name with low similarity when creator is omitted', () => {
+        const existing = makeBaseCharacter();
+        existing.data.creator = '';
+        existing.creator = '';
+        scriptMod.characters.length = 0;
+        scriptMod.characters.push(existing);
+
+        const incoming = {
+            data: {
+                name: 'Alice',
+                creator: '',
+                description: 'An intergalactic starship AI named Alice governing deep space operations.',
+                personality: 'Analytical, robotic',
+                scenario: 'Aboard spaceship Aurora',
+            },
+        };
+
+        // Same name ('Alice'), but completely different character -> must NOT match
+        expect(CardUpdateManager.findMatchingCharacterIndex(incoming, 'Alice.png')).toBe(-1);
+    });
+
+    test('findMatchingCharacterIndex accepts same name when creator matches and content is related', () => {
+        const existing = makeBaseCharacter();
+        existing.data.creator = 'SharedCreator';
+        existing.creator = 'SharedCreator';
+        scriptMod.characters.length = 0;
+        scriptMod.characters.push(existing);
+
+        const incoming = {
+            data: {
+                name: 'Alice',
+                creator: 'SharedCreator',
+                description: 'Original description with newly added backstory and lore details.',
+                personality: 'Kind, gentle',
+                scenario: 'In a fantasy village',
+                character_version: '2.0',
+            },
+        };
+
+        expect(CardUpdateManager.findMatchingCharacterIndex(incoming, 'Alice.png')).toBe(0);
+    });
+});

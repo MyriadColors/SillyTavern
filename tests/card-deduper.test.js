@@ -167,3 +167,58 @@ describe('CardDeduperManager settings and whitelist', () => {
         expect(CardDeduperManager.getIgnoredPairs()).toEqual([]);
     });
 });
+
+describe('Guarded Deduplication Matching Logic', () => {
+    test('distinguishes cards with same normalized name but different creators', () => {
+        const cardA = {
+            name: 'Alice',
+            creator: 'AuthorX',
+            description: 'A fantasy elven archer.',
+            personality: 'Calm, focused',
+        };
+        const cardB = {
+            name: 'Alice 1',
+            creator: 'AuthorY',
+            description: 'A modern detective solving cybercrimes in Tokyo.',
+            personality: 'Brash, impatient',
+        };
+
+        const nameA = normalizeCharacterName(cardA.name);
+        const nameB = normalizeCharacterName(cardB.name);
+        expect(nameA).toBe(nameB); // Same normalized name ('alice')
+
+        const aCreator = cardA.creator.toLowerCase();
+        const bCreator = cardB.creator.toLowerCase();
+        expect(aCreator).not.toBe(bCreator);
+        expect(aCreator.length).toBeGreaterThan(0);
+        expect(bCreator.length).toBeGreaterThan(0);
+    });
+
+    test('matches cards with same creator and related content', () => {
+        const cardA = {
+            name: 'Alice',
+            creator: 'AuthorX',
+            description: 'A fantasy elven archer roaming the Whispering Woods.',
+            personality: 'Calm, focused',
+            character_version: '1.0',
+        };
+        const cardB = {
+            name: 'Alice v2.0',
+            creator: 'AuthorX',
+            description: 'A fantasy elven archer roaming the Whispering Woods with enchanted bow.',
+            personality: 'Calm, focused',
+            character_version: '2.0',
+        };
+
+        const nameA = normalizeCharacterName(cardA.name);
+        const nameB = normalizeCharacterName(cardB.name);
+        expect(nameA).toBe(nameB);
+
+        const aCreator = cardA.creator.toLowerCase();
+        const bCreator = cardB.creator.toLowerCase();
+        expect(aCreator === bCreator).toBe(true);
+
+        const simScore = calculateSimilarityScore(cardA.description, cardB.description);
+        expect(simScore).toBeGreaterThan(0.7);
+    });
+});

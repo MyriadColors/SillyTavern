@@ -257,6 +257,7 @@ export class CardDeduperManager {
                                 <div class="flex-container alignItemsCenter" style="gap: 4px;">
                                     <strong style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${card.name}</strong>
                                     ${card.character_version ? `<span class="tag" style="font-size: 0.7em; padding: 1px 4px;">v${card.character_version}</span>` : ''}
+                                    ${card.creator ? `<span class="notes" style="font-size: 0.75em; max-width: 100px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${card.creator}"><i class="fa-solid fa-user-pen"></i> ${card.creator}</span>` : ''}
                                     ${isPrimary ? `<span class="tag" style="font-size: 0.7em; padding: 1px 4px; background-color: var(--green);">${t`Primary`}</span>` : ''}
                                 </div>
                                 <div class="notes" style="font-size: 0.8em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${card.avatar}</div>
