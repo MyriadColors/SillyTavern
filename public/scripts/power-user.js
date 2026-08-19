@@ -4152,6 +4152,16 @@ jQuery(() => {
         helpString: 'Start a new chat with the current character',
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'chat-dedupe',
+        callback: async () => {
+            const { ChatDeduperManager } = await import('./chat-deduper.js');
+            await ChatDeduperManager.openDeduperDialog();
+            return '';
+        },
+        aliases: ['dedupe-chats', 'chatdedupe'],
+        helpString: 'Open the Chat Deduper to scan and clean up duplicate or unused greeting chats.',
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'random',
         callback: doRandomChat,
         unnamedArgumentList: [

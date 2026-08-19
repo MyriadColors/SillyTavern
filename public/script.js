@@ -602,7 +602,6 @@ export const ANIMATION_DURATION_DEFAULT = 125;
 export let animation_duration = ANIMATION_DURATION_DEFAULT;
 export let animation_easing = 'ease-in-out';
 let popup_type = '';
-let chat_file_for_del = '';
 export let online_status = 'no_connection';
 
 export let is_send_press = false; //Send generation
@@ -8553,11 +8552,25 @@ export function getCurrentChatDetails() {
  * The function first fetches the chats, processes them, and then displays them in
  * the HTML. It also has a built-in search functionality that allows filtering the
  * displayed chats based on a search query.
+ */
+let isChatSelectMode = false;
+
+function updateBulkDeleteButton() {
+    const count = $('.chat_select_checkbox:checked').length;
+    $('#chat_bulk_delete_btn').text(`${t`Delete Selected`} (${count})`).prop('disabled', count === 0);
+}
+
+/**
  * @param {string[]} hightlightNames - An array of chat names to highlight
  */
 export async function displayPastChats(hightlightNames = []) {
     $('#select_chat_div').empty();
     $('#select_chat_search').val('').off('input');
+
+    isChatSelectMode = false;
+    $('#chat_select_mode_btn').removeClass('active');
+    $('#chat_bulk_actions_toolbar').hide();
+    updateBulkDeleteButton();
 
     const chatDetails = getCurrentChatDetails();
     const currentChat = chatDetails.sessionName;
@@ -8606,6 +8619,9 @@ async function displayChats(searchQuery, currentChat, displayName, avatarImg, se
 
         filteredData.sort((a, b) => sortMoments(timestampToMoment(a.last_mes), timestampToMoment(b.last_mes)));
 
+        const nodesToAppend = [];
+        let highlightedElement = null;
+
         for (const chat of filteredData) {
             const isSelected = currentChat === chat.file_name;
             const template = $('#past_chat_template .select_chat_block_wrapper').clone();
@@ -8618,18 +8634,38 @@ async function displayChats(searchQuery, currentChat, displayName, avatarImg, se
             template.find('.PastChat_cross').attr('file_name', chat.file_name);
             template.find('.chat_messages_date').text(timestampToMoment(chat.last_mes).format('lll'));
 
+            const checkbox = template.find('.chat_select_checkbox');
+            if (isChatSelectMode) {
+                checkbox.show();
+            }
+
+            checkbox.on('change', () => {
+                updateBulkDeleteButton();
+            });
+
             if (isSelected) {
                 template.find('.select_chat_block').attr('highlight', String(true));
             }
 
-            $('#select_chat_div').append(template);
+            nodesToAppend.push(template);
 
             if (Array.isArray(highlightNames) && highlightNames.includes(chat.file_name)) {
-                const templateOffset = template.offset().top - template.parent().offset().top;
-                $('#select_chat_div').scrollTop(templateOffset);
-                flashHighlight(template, debounce_timeout.extended);
+                highlightedElement = template;
             }
         }
+
+        // Batched single DOM layout insertion
+        if (nodesToAppend.length > 0) {
+            $('#select_chat_div').append(nodesToAppend);
+        }
+
+        if (highlightedElement) {
+            const templateOffset = highlightedElement.offset().top - highlightedElement.parent().offset().top;
+            $('#select_chat_div').scrollTop(templateOffset);
+            flashHighlight(highlightedElement, debounce_timeout.extended);
+        }
+
+        updateBulkDeleteButton();
     } catch (error) {
         console.error('Error loading chats:', error);
         toastr.error('Could not load chat data. Try reloading the page.');
@@ -10674,6 +10710,38 @@ async function importFromURL(items, files) {
     }
 }
 
+/**
+ * Resets the current chat in-place to the initial character greeting (Greeting 1).
+ */
+export async function resetChatToGreeting() {
+    if (!characters[this_chid] && !selected_group) {
+        return;
+    }
+
+    if (selected_group) {
+        await clearChat({ clearData: true });
+        await getGroupChat(selected_group, true);
+        return;
+    }
+
+    await clearChat({ clearData: true });
+    chat_metadata = {};
+    const message = getFirstMessage();
+    if (message.mes) {
+        chat.push(message);
+    }
+    await loadItemizedPrompts(getCurrentChatId());
+    await printMessages();
+    select_selected_character(this_chid);
+    await saveChatConditional();
+    await eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
+    if (chat.length === 1) {
+        const chatId = (chat.length - 1);
+        await eventSource.emit(event_types.MESSAGE_RECEIVED, chatId, 'first_message');
+        await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chatId, 'first_message');
+    }
+}
+
 export async function doNewChat({ deleteCurrentChat = false } = {}) {
     //Make a new chat for selected character
     if ((!selected_group && this_chid == undefined) || menu_type == 'create') {
@@ -10682,14 +10750,32 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
 
     //Fix it; New chat doesn't create while open create character menu
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat({ clearData: true });
 
-    chat_file_for_del = getCurrentChatDetails()?.sessionName;
+    const chat_file_for_del = getCurrentChatDetails()?.sessionName;
+
+    const isUnused = !selected_group
+        ? (chat.length === 0 || (chat.length === 1 && !chat[0].is_user && !chat[0].is_system))
+        : (!chat.some(m => m.is_user));
+
+    const isAlreadyGreetingOne = isUnused && !chat_metadata.tainted && (chat.length === 0 || (chat.length === 1 && (chat[0].swipe_id === 0 || chat[0].swipe_id === undefined)));
+
+    if (isAlreadyGreetingOne && !deleteCurrentChat) {
+        toastr.info(t`Already at the initial greeting.`);
+        return;
+    }
+
+    if (isUnused && !deleteCurrentChat) {
+        await resetChatToGreeting();
+        toastr.info(t`Reset to initial greeting.`);
+        return;
+    }
 
     // Make it easier to find in backups
-    if (deleteCurrentChat) {
+    if (deleteCurrentChat && !isUnused) {
         await saveChatConditional();
     }
+
+    await clearChat({ clearData: true });
 
     if (selected_group) {
         await createNewGroupChat(selected_group);
@@ -11669,6 +11755,21 @@ jQuery(async function () {
             }
         } else if (id == 'option_start_new_chat') {
             if ((selected_group || this_chid !== undefined) && !is_send_press) {
+                const isUnused = !selected_group
+                    ? (chat.length === 0 || (chat.length === 1 && !chat[0].is_user && !chat[0].is_system))
+                    : (!chat.some(m => m.is_user));
+                const isAlreadyGreetingOne = isUnused && !chat_metadata.tainted && (chat.length === 0 || (chat.length === 1 && (chat[0].swipe_id === 0 || chat[0].swipe_id === undefined)));
+
+                if (isAlreadyGreetingOne) {
+                    toastr.info(t`Already at the initial greeting.`);
+                    return;
+                }
+
+                if (isUnused) {
+                    await doNewChat({ deleteCurrentChat: false });
+                    return;
+                }
+
                 let deleteCurrentChat = false;
                 const result = await Popup.show.confirm(t`Start new chat?`, await renderTemplateAsync('newChatConfirm'), {
                     onClose: () => { deleteCurrentChat = !!$('#del_chat_checkbox').prop('checked'); },
@@ -11748,6 +11849,83 @@ jQuery(async function () {
     $('#newChatFromManageScreenButton').on('click', async function () {
         await doNewChat({ deleteCurrentChat: false });
         $('#select_chat_cross').trigger('click');
+    });
+
+    $('#chat_dedupe_button').on('click', async function () {
+        const { ChatDeduperManager } = await import('./scripts/chat-deduper.js');
+        await ChatDeduperManager.openDeduperDialog();
+    });
+
+    $('#chat_select_mode_btn').on('click', function () {
+        isChatSelectMode = !isChatSelectMode;
+        $(this).toggleClass('active', isChatSelectMode);
+        $('#chat_bulk_actions_toolbar').toggle(isChatSelectMode);
+        $('.chat_select_checkbox').toggle(isChatSelectMode);
+        if (!isChatSelectMode) {
+            $('.chat_select_checkbox').prop('checked', false);
+        }
+        updateBulkDeleteButton();
+    });
+
+    $('#chat_bulk_select_all_btn').on('click', function () {
+        const allChecked = $('.chat_select_checkbox').length > 0 &&
+            $('.chat_select_checkbox:not(:checked)').length === 0;
+        $('.chat_select_checkbox').prop('checked', !allChecked);
+        updateBulkDeleteButton();
+    });
+
+    $('#chat_bulk_delete_btn').on('click', async function () {
+        const selectedFiles = [];
+        const activeChatDetails = getCurrentChatDetails();
+        let needActiveChatSwitch = false;
+
+        $('.chat_select_checkbox:checked').each(function () {
+            const fileName = $(this).closest('.select_chat_block').attr('file_name');
+            if (fileName) {
+                selectedFiles.push({
+                    avatar_url: selected_group ? null : characters[this_chid]?.avatar,
+                    file_name: fileName,
+                    is_group: !!selected_group,
+                });
+                if (activeChatDetails?.sessionName === fileName) {
+                    needActiveChatSwitch = true;
+                }
+            }
+        });
+
+        if (selectedFiles.length === 0) {
+            toastr.warning(t`No chat files selected.`);
+            return;
+        }
+
+        const confirmed = await Popup.show.confirm(
+            t`Delete Selected Chats`,
+            t`Safely delete ${selectedFiles.length} selected chat files? (They will be backed up to backups/chat_dedupe/ and can be restored anytime).`,
+        );
+        if (!confirmed) return;
+
+        if (needActiveChatSwitch) {
+            await doNewChat({ deleteCurrentChat: false });
+        }
+
+        try {
+            const response = await fetch('/api/chats/dedupe/cleanup', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({
+                    safeMode: 'trash',
+                    files: selectedFiles,
+                }),
+            });
+
+            if (!response.ok) throw new Error(response.statusText);
+            const result = await response.json();
+            toastr.success(t`Successfully deleted ${result.deletedCount || selectedFiles.length} chat files.`);
+            await displayPastChats();
+        } catch (err) {
+            console.error('Bulk chat deletion failed:', err);
+            toastr.error(t`Failed to delete selected chats: ${err.message}`);
+        }
     });
 
     //////////////////////////////////////////////////////////////////////////////////////////////

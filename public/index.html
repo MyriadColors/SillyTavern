@@ -6736,6 +6736,18 @@
                         <i class="fa-solid fa-file-import"></i>
                         <span data-i18n="Import Chat">Import Chat</span>
                     </div>
+                    <div id="chat_dedupe_button" class="menu_button menu_button_icon" title="Find & Clean Duplicate / Unused Chats" data-i18n="[title]Find & Clean Duplicate / Unused Chats">
+                        <i class="fa-solid fa-broom"></i>
+                        <span data-i18n="Deduplicate">Deduplicate</span>
+                    </div>
+                    <div id="chat_select_mode_btn" class="menu_button menu_button_icon" title="Toggle Selection Mode" data-i18n="[title]Toggle Selection Mode">
+                        <i class="fa-solid fa-list-check"></i>
+                        <span data-i18n="Select">Select</span>
+                    </div>
+                    <div id="chat_bulk_actions_toolbar" class="flex-container alignItemsCenter" style="display: none; gap: 6px;">
+                        <button id="chat_bulk_select_all_btn" class="menu_button" style="font-size: 0.85em;" data-i18n="Select All">Select All</button>
+                        <button id="chat_bulk_delete_btn" class="menu_button popup-button-ok" style="font-size: 0.85em; background-color: var(--crimson);" data-i18n="Delete Selected">Delete Selected</button>
+                    </div>
                     <input type="search" id="select_chat_search" class="text_pole flex1" data-i18n="[placeholder]Search..." placeholder="Search..." autocomplete="off">
                     <div id="select_chat_cross" class="opacity50p hoverglow fa-solid fa-circle-xmark fontsize120p" alt="Close Past Chat Popup"></div>
                 </div>
@@ -6822,7 +6834,8 @@
             <div class="select_chat_block_wrapper flex-container">
                 <div class="select_chat_block  wide100p flex-container" file_name="">
                     <div id="select_chat_name_wrapper" class="flex-container alignitemscenter justifySpaceBetween wide100p">
-                        <div class="flex-container alignItemsCenter">
+                        <div class="flex-container alignItemsCenter" style="gap: 6px;">
+                            <input type="checkbox" class="chat_select_checkbox" style="display: none; margin-right: 4px;" />
                             <small class="select_chat_block_filename select_chat_block_filename_item"></small>
                             <div title="Rename chat file" class="renameChatButton hoverglow opacity50p fa-solid fa-pencil fa-sm" data-i18n="[title]Rename chat file"></div>
                         </div>

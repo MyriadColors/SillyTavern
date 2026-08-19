@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import process from 'node:process';
+import crypto from 'node:crypto';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
@@ -351,6 +352,62 @@ async function checkChatIntegrity(filePath, integritySlug) {
  * @param {string} pathToFile - Path to the chat file
  * @param {object} additionalData - Additional data to include in the result
  * @param {boolean} withMetadata - Whether to read chat metadata
+/**
+ * In-memory cache for chat file metadata to avoid redundant line-by-line disk parses.
+ * Keyed by absolute file path, validated against mtimeMs and size.
+ */
+export class ChatMetadataCache {
+    /** @type {Map<string, { mtimeMs: number, size: number, data: object }>} */
+    static #cache = new Map();
+    static #maxEntries = 50000;
+
+    /**
+     * @param {string} filePath
+     * @param {fs.Stats} stats
+     * @returns {object|null}
+     */
+    static get(filePath, stats) {
+        const entry = this.#cache.get(filePath);
+        if (entry && entry.mtimeMs === stats.mtimeMs && entry.size === stats.size) {
+            return entry.data;
+        }
+        return null;
+    }
+
+    /**
+     * @param {string} filePath
+     * @param {fs.Stats} stats
+     * @param {object} data
+     */
+    static set(filePath, stats, data) {
+        if (this.#cache.size >= this.#maxEntries) {
+            const keysToDrop = Array.from(this.#cache.keys()).slice(0, Math.floor(this.#maxEntries * 0.2));
+            keysToDrop.forEach(k => this.#cache.delete(k));
+        }
+        this.#cache.set(filePath, {
+            mtimeMs: stats.mtimeMs,
+            size: stats.size,
+            data,
+        });
+    }
+
+    /**
+     * @param {string} filePath
+     */
+    static invalidate(filePath) {
+        this.#cache.delete(filePath);
+    }
+
+    static clear() {
+        this.#cache.clear();
+    }
+}
+
+/**
+ * Gets chat info for a given file.
+ * @param {string} pathToFile - Path to the chat file
+ * @param {object} additionalData - Additional data to attach to the chat info
+ * @param {boolean} withMetadata - If true, will include metadata in the chat info
  * @param {ChatMatchFunction|null} matcher - Optional function to match messages
  * @returns {Promise<ChatInfo>}
  *
@@ -366,6 +423,22 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
     }
 
     const hasMatcher = (typeof matcher === 'function');
+
+    if (!hasMatcher && !withMetadata) {
+        const cached = ChatMetadataCache.get(pathToFile, stats);
+        if (cached && cached.isValid) {
+            return {
+                match: true,
+                file_id: cached.fileId,
+                file_name: cached.fileName,
+                file_size: cached.fileSize,
+                chat_items: cached.totalMessages,
+                mes: cached.previewMessage || '[The message is empty]',
+                last_mes: cached.lastModifiedMs || stats.mtimeMs,
+                ...additionalData,
+            };
+        }
+    }
 
     const chatData = {
         match: false,
@@ -602,6 +675,7 @@ router.post('/delete', validateAvatarUrlMiddleware, function (request, response)
         }
         //Return success if the file was deleted.
         if (tryDeleteFile(chatFilePath)) {
+            ChatMetadataCache.invalidate(chatFilePath);
             return response.send({ ok: true });
         } else {
             console.error('The chat file was not deleted.');
@@ -1085,5 +1159,612 @@ router.post('/recent', async function (request, response) {
     } catch (error) {
         console.error(error);
         return response.sendStatus(500);
+    }
+});
+
+/**
+ * Calculates a SHA-256 hash representing the conversation message content and roles.
+ * @param {Array<{is_user?: boolean, is_system?: boolean, mes?: string}>} messages List of message objects
+ * @returns {string} SHA-256 hash of the messages
+ */
+export function calculateChatContentHash(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return '';
+    }
+    const normalized = messages.map(m => `${m.is_user ? 'U' : m.is_system ? 'S' : 'A'}:${(m.mes || '').trim()}`).join('\n');
+    return crypto.createHash('sha256').update(normalized, 'utf8').digest('hex');
+}
+
+/**
+ * Analyzes a single chat JSONL file for deduplication with memory caching.
+ * @param {string} filePath Absolute path to the chat JSONL file
+ * @returns {Promise<{
+ *   isValid: boolean,
+ *   fileId: string,
+ *   fileName: string,
+ *   filePath: string,
+ *   fileSize: string,
+ *   fileSizeBytes: number,
+ *   totalMessages: number,
+ *   userMessagesCount: number,
+ *   firstMessage: string,
+ *   contentHash: string,
+ *   lastModified: string,
+ *   lastModifiedMs: number,
+ *   previewMessage: string,
+ * }>}
+ */
+export async function analyzeChatFile(filePath) {
+    const parsedPath = path.parse(filePath);
+    let stats;
+    try {
+        stats = await fs.promises.stat(filePath);
+    } catch {
+        return {
+            isValid: false,
+            fileId: parsedPath.name,
+            fileName: parsedPath.base,
+            filePath,
+            fileSize: '0 B',
+            fileSizeBytes: 0,
+            totalMessages: 0,
+            userMessagesCount: 0,
+            firstMessage: '',
+            contentHash: '',
+            lastModified: '',
+            lastModifiedMs: 0,
+            previewMessage: '',
+        };
+    }
+
+    const cached = ChatMetadataCache.get(filePath, stats);
+    if (cached) {
+        return cached;
+    }
+
+    if (stats.size === 0) {
+        const emptyResult = {
+            isValid: true,
+            fileId: parsedPath.name,
+            fileName: parsedPath.base,
+            filePath,
+            fileSize: formatBytes(0),
+            fileSizeBytes: 0,
+            totalMessages: 0,
+            userMessagesCount: 0,
+            firstMessage: '',
+            contentHash: '',
+            lastModified: new Date(stats.mtimeMs).toISOString(),
+            lastModifiedMs: stats.mtimeMs,
+            previewMessage: '',
+        };
+        ChatMetadataCache.set(filePath, stats, emptyResult);
+        return emptyResult;
+    }
+
+    let fileStream;
+    let rl;
+    try {
+        fileStream = fs.createReadStream(filePath, { encoding: 'utf8' });
+        rl = readline.createInterface({
+            input: fileStream,
+            crlfDelay: Infinity,
+        });
+
+        let itemCounter = 0;
+        let userMessagesCount = 0;
+        let firstMessage = '';
+        let lastMessage = '';
+        const messagesForHash = [];
+
+        for await (const line of rl) {
+            if (!line.trim()) continue;
+            const parsed = tryParse(line);
+            if (!parsed) continue;
+
+            if (itemCounter > 0) {
+                if (parsed.is_user) {
+                    userMessagesCount++;
+                }
+                if (itemCounter === 1) {
+                    firstMessage = parsed.mes || '';
+                }
+                lastMessage = parsed.mes || '';
+                messagesForHash.push({
+                    is_user: !!parsed.is_user,
+                    is_system: !!parsed.is_system,
+                    mes: parsed.mes || '',
+                });
+            }
+            itemCounter++;
+        }
+
+        const totalMessages = Math.max(0, itemCounter - 1);
+        const contentHash = calculateChatContentHash(messagesForHash);
+
+        const result = {
+            isValid: true,
+            fileId: parsedPath.name,
+            fileName: parsedPath.base,
+            filePath,
+            fileSize: formatBytes(stats.size),
+            fileSizeBytes: stats.size,
+            totalMessages,
+            userMessagesCount,
+            firstMessage,
+            contentHash,
+            lastModified: new Date(stats.mtimeMs).toISOString(),
+            lastModifiedMs: stats.mtimeMs,
+            previewMessage: getPreviewMessage(lastMessage || firstMessage),
+        };
+
+        ChatMetadataCache.set(filePath, stats, result);
+        return result;
+    } catch (err) {
+        console.warn(`Could not analyze chat file: ${filePath}`, err);
+        return {
+            isValid: false,
+            fileId: parsedPath.name,
+            fileName: parsedPath.base,
+            filePath,
+            fileSize: '0 B',
+            fileSizeBytes: 0,
+            totalMessages: 0,
+            userMessagesCount: 0,
+            firstMessage: '',
+            contentHash: '',
+            lastModified: '',
+            lastModifiedMs: 0,
+            previewMessage: '',
+        };
+    } finally {
+        rl?.close();
+    }
+}
+
+/**
+ * Analyzes multiple chat files in parallel with bounded concurrency.
+ * @param {string[]} filePaths
+ * @param {number} [concurrency=16]
+ * @returns {Promise<Array<object>>}
+ */
+export async function analyzeChatFilesBatch(filePaths, concurrency = 16) {
+    if (!Array.isArray(filePaths) || filePaths.length === 0) {
+        return [];
+    }
+
+    const results = [];
+    for (let i = 0; i < filePaths.length; i += concurrency) {
+        const chunk = filePaths.slice(i, i + concurrency);
+        const chunkResults = await Promise.all(chunk.map(fp => analyzeChatFile(fp)));
+        results.push(...chunkResults);
+    }
+    return results;
+}
+
+/**
+ * Clusters analyzed chat files for a character or group into deduplication groups.
+ * @param {Array<object>} analyzedFiles List of analyzed chat files
+ * @param {object} context Context info ({ characterName, avatar, isGroup, currentChatName })
+ * @param {object} [options] Filter options ({ includeGreetingDuplicates, includeContentDuplicates })
+ * @returns {Array<object>} List of clusters
+ */
+export function clusterAnalyzedChats(analyzedFiles, context, options = {}) {
+    const { characterName = 'Character', avatar = '', isGroup = false, currentChatName = '' } = context;
+    const { includeGreetingDuplicates = true, includeContentDuplicates = true } = options;
+    const validFiles = analyzedFiles.filter(f => f && f.isValid);
+    const clusters = [];
+
+    validFiles.sort((a, b) => b.lastModifiedMs - a.lastModifiedMs);
+
+    // 1. Cluster: Unused Greeting Chats (0 user messages)
+    if (includeGreetingDuplicates) {
+        const greetingFiles = validFiles.filter(f => f.userMessagesCount === 0);
+        if (greetingFiles.length >= 2) {
+            const primaryFile = greetingFiles.find(f => f.fileId === currentChatName) || greetingFiles[0];
+            const duplicateFiles = greetingFiles.filter(f => f.fileId !== primaryFile.fileId);
+
+            clusters.push({
+                id: `greeting_${isGroup ? 'grp_' : 'chr_'}${avatar || characterName}`,
+                type: 'greeting_duplicate',
+                typeName: 'Unused Greeting Chats',
+                name: `${characterName} — Unused Greeting Chats`,
+                characterName,
+                avatar,
+                isGroup,
+                recommendedPrimary: primaryFile.fileId,
+                totalDuplicates: duplicateFiles.length,
+                files: greetingFiles.map(f => ({
+                    fileId: f.fileId,
+                    fileName: f.fileName,
+                    fileSize: f.fileSize,
+                    fileSizeBytes: f.fileSizeBytes,
+                    totalMessages: f.totalMessages,
+                    userMessagesCount: f.userMessagesCount,
+                    lastModified: f.lastModified,
+                    previewMessage: f.previewMessage,
+                    isPrimary: f.fileId === primaryFile.fileId,
+                    selectedForDeletion: f.fileId !== primaryFile.fileId,
+                })),
+            });
+        }
+    }
+
+    // 2. Cluster: Exact Content Duplicates (userMessagesCount > 0, same contentHash)
+    if (includeContentDuplicates) {
+        const hashGroups = new Map();
+        for (const file of validFiles) {
+            if (file.userMessagesCount === 0) continue;
+            if (!file.contentHash) continue;
+            if (!hashGroups.has(file.contentHash)) {
+                hashGroups.set(file.contentHash, []);
+            }
+            hashGroups.get(file.contentHash).push(file);
+        }
+
+        for (const [hash, files] of hashGroups.entries()) {
+            if (files.length >= 2) {
+                const primaryFile = files.find(f => f.fileId === currentChatName) || files[0];
+                const duplicateFiles = files.filter(f => f.fileId !== primaryFile.fileId);
+
+                clusters.push({
+                    id: `content_${hash.substring(0, 12)}_${avatar || characterName}`,
+                    type: 'content_duplicate',
+                    typeName: 'Identical Conversation History',
+                    name: `${characterName} — Identical Conversations (${files[0].totalMessages} msgs)`,
+                    characterName,
+                    avatar,
+                    isGroup,
+                    recommendedPrimary: primaryFile.fileId,
+                    totalDuplicates: duplicateFiles.length,
+                    files: files.map(f => ({
+                        fileId: f.fileId,
+                        fileName: f.fileName,
+                        fileSize: f.fileSize,
+                        fileSizeBytes: f.fileSizeBytes,
+                        totalMessages: f.totalMessages,
+                        userMessagesCount: f.userMessagesCount,
+                        lastModified: f.lastModified,
+                        previewMessage: f.previewMessage,
+                        isPrimary: f.fileId === primaryFile.fileId,
+                        selectedForDeletion: f.fileId !== primaryFile.fileId,
+                    })),
+                });
+            }
+        }
+    }
+
+    return clusters;
+}
+
+router.post('/dedupe/scan', async function (request, response) {
+    try {
+        const {
+            avatar_url: avatarUrl,
+            group_id: groupId,
+            scope = 'current',
+            includeGreetingDuplicates = true,
+            includeContentDuplicates = true,
+            currentChatName = '',
+        } = request.body || {};
+
+        const allClusters = [];
+
+        if (scope === 'current' && groupId) {
+            const groupFile = path.join(request.user.directories.groups, `${groupId}.json`);
+            if (fs.existsSync(groupFile)) {
+                const groupData = tryParse(tryReadFileSync(groupFile));
+                if (groupData && Array.isArray(groupData.chats)) {
+                    const filePaths = groupData.chats
+                        .map(chatId => path.join(request.user.directories.groupChats, `${chatId}.jsonl`))
+                        .filter(fp => fs.existsSync(fp));
+
+                    const analyzed = await analyzeChatFilesBatch(filePaths);
+                    allClusters.push(...clusterAnalyzedChats(analyzed, {
+                        characterName: groupData.name || 'Group',
+                        avatar: groupData.avatar_url || '',
+                        isGroup: true,
+                        currentChatName: groupData.chat_id || currentChatName,
+                    }, { includeGreetingDuplicates, includeContentDuplicates }));
+                }
+            }
+        } else if (scope === 'current' && avatarUrl) {
+            const cardName = String(avatarUrl).replace('.png', '');
+            const characterChatsDir = path.join(request.user.directories.chats, cardName);
+            if (fs.existsSync(characterChatsDir)) {
+                const files = (await fs.promises.readdir(characterChatsDir, { withFileTypes: true }))
+                    .filter(e => e.isFile() && path.extname(e.name) === '.jsonl')
+                    .map(e => e.name);
+
+                const filePaths = files.map(f => path.join(characterChatsDir, f));
+                const analyzed = await analyzeChatFilesBatch(filePaths);
+
+                allClusters.push(...clusterAnalyzedChats(analyzed, {
+                    characterName: cardName,
+                    avatar: avatarUrl,
+                    isGroup: false,
+                    currentChatName,
+                }, { includeGreetingDuplicates, includeContentDuplicates }));
+            }
+        } else {
+            // High-performance library-wide parallel scan
+            const targetItems = [];
+            const allFilePaths = [];
+
+            const charDirs = await fs.promises.readdir(request.user.directories.chats, { withFileTypes: true });
+            for (const dirent of charDirs) {
+                if (dirent.isDirectory() && !dirent.name.startsWith('_') && !dirent.name.startsWith('.')) {
+                    const charDir = path.join(request.user.directories.chats, dirent.name);
+                    const files = (await fs.promises.readdir(charDir, { withFileTypes: true }))
+                        .filter(e => e.isFile() && path.extname(e.name) === '.jsonl')
+                        .map(e => e.name);
+
+                    if (files.length >= 2) {
+                        const filePaths = files.map(f => path.join(charDir, f));
+                        targetItems.push({
+                            characterName: dirent.name,
+                            avatar: `${dirent.name}.png`,
+                            isGroup: false,
+                            filePaths,
+                        });
+                        allFilePaths.push(...filePaths);
+                    }
+                }
+            }
+
+            if (fs.existsSync(request.user.directories.groups)) {
+                const groupFiles = (await fs.promises.readdir(request.user.directories.groups, { withFileTypes: true }))
+                    .filter(e => e.isFile() && path.extname(e.name) === '.json')
+                    .map(e => e.name);
+
+                for (const gFile of groupFiles) {
+                    try {
+                        const groupData = tryParse(tryReadFileSync(path.join(request.user.directories.groups, gFile)));
+                        if (groupData && Array.isArray(groupData.chats) && groupData.chats.length >= 2) {
+                            const filePaths = groupData.chats
+                                .map(chatId => path.join(request.user.directories.groupChats, `${chatId}.jsonl`))
+                                .filter(fp => fs.existsSync(fp));
+
+                            if (filePaths.length >= 2) {
+                                targetItems.push({
+                                    characterName: groupData.name || 'Group',
+                                    avatar: groupData.avatar_url || '',
+                                    isGroup: true,
+                                    currentChatName: groupData.chat_id || '',
+                                    filePaths,
+                                });
+                                allFilePaths.push(...filePaths);
+                            }
+                        }
+                    } catch {
+                        // ignore
+                    }
+                }
+            }
+
+            // Batch analyze all collected files in parallel with cache
+            const allAnalyzed = await analyzeChatFilesBatch(allFilePaths);
+            const analyzedMap = new Map();
+            allAnalyzed.forEach(a => {
+                if (a && a.filePath) {
+                    analyzedMap.set(a.filePath, a);
+                }
+            });
+
+            for (const item of targetItems) {
+                const itemAnalyzed = item.filePaths.map(fp => analyzedMap.get(fp)).filter(Boolean);
+                allClusters.push(...clusterAnalyzedChats(itemAnalyzed, {
+                    characterName: item.characterName,
+                    avatar: item.avatar,
+                    isGroup: item.isGroup,
+                    currentChatName: item.currentChatName || '',
+                }, { includeGreetingDuplicates, includeContentDuplicates }));
+            }
+        }
+
+        let totalDuplicates = 0;
+        let totalFreedBytes = 0;
+        for (const cluster of allClusters) {
+            totalDuplicates += (cluster.totalDuplicates || 0);
+            for (const file of cluster.files) {
+                if (file.selectedForDeletion) {
+                    totalFreedBytes += (file.fileSizeBytes || 0);
+                }
+            }
+        }
+
+        return response.send({
+            clusters: allClusters,
+            totalClusters: allClusters.length,
+            totalDuplicates,
+            totalFreedBytes,
+            totalFreedFormatted: formatBytes(totalFreedBytes),
+        });
+    } catch (error) {
+        console.error('Chat dedupe scan error:', error);
+        return response.status(500).send({ error: error.message });
+    }
+});
+
+router.post('/dedupe/cleanup', async function (request, response) {
+    try {
+        const {
+            safeMode = 'trash',
+            files = [],
+        } = request.body || {};
+
+        if (!Array.isArray(files) || files.length === 0) {
+            return response.send({ ok: true, deletedCount: 0, backupId: null });
+        }
+
+        const timestamp = generateTimestamp();
+        const backupId = `chat_dedupe_${timestamp}`;
+        const dedupeBackupsBase = path.join(request.user.directories.backups, 'chat_dedupe');
+        const currentBackupDir = path.join(dedupeBackupsBase, backupId);
+
+        if (safeMode === 'trash') {
+            fs.mkdirSync(currentBackupDir, { recursive: true });
+        }
+
+        const manifest = {
+            backupId,
+            timestamp: new Date().toISOString(),
+            safeMode,
+            files: [],
+            totalDeleted: 0,
+            freedBytes: 0,
+        };
+
+        let deletedCount = 0;
+        let freedBytes = 0;
+
+        for (const item of files) {
+            const isGroup = !!item.is_group;
+            const fileName = path.extname(item.file_name) ? item.file_name : `${item.file_name}.jsonl`;
+            const dirName = isGroup ? '' : String(item.avatar_url || '').replace('.png', '');
+            const targetDir = isGroup ? request.user.directories.groupChats : path.join(request.user.directories.chats, dirName);
+            const filePath = path.join(targetDir, sanitize(fileName));
+
+            if (!isPathUnderParent(request.user.directories.chats, filePath) &&
+                !isPathUnderParent(request.user.directories.groupChats, filePath)) {
+                console.warn('Skipping file outside chats directory:', filePath);
+                continue;
+            }
+
+            if (!fs.existsSync(filePath)) {
+                continue;
+            }
+
+            let fileSize = 0;
+            try {
+                fileSize = fs.statSync(filePath).size;
+            } catch {
+                // ignore
+            }
+
+            if (safeMode === 'trash') {
+                try {
+                    const backupSubdir = path.join(currentBackupDir, isGroup ? '_groups' : dirName);
+                    fs.mkdirSync(backupSubdir, { recursive: true });
+                    const backupFilePath = path.join(backupSubdir, fileName);
+                    fs.copyFileSync(filePath, backupFilePath);
+                } catch (err) {
+                    console.error(`Could not archive chat file ${fileName} to backup:`, err);
+                }
+            }
+
+            if (tryDeleteFile(filePath)) {
+                ChatMetadataCache.invalidate(filePath);
+                deletedCount++;
+                freedBytes += fileSize;
+                manifest.files.push({
+                    avatar_url: item.avatar_url,
+                    file_name: fileName,
+                    is_group: isGroup,
+                    fileSize,
+                });
+            }
+        }
+
+        manifest.totalDeleted = deletedCount;
+        manifest.freedBytes = freedBytes;
+
+        if (safeMode === 'trash') {
+            tryWriteFileSync(path.join(currentBackupDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+        }
+
+        return response.send({
+            ok: true,
+            deletedCount,
+            backupId: safeMode === 'trash' ? backupId : null,
+            freedBytes,
+            freedFormatted: formatBytes(freedBytes),
+        });
+    } catch (error) {
+        console.error('Chat dedupe cleanup error:', error);
+        return response.status(500).send({ error: error.message });
+    }
+});
+
+router.post('/dedupe/backups', async function (request, response) {
+    try {
+        const dedupeBackupsBase = path.join(request.user.directories.backups, 'chat_dedupe');
+        if (!fs.existsSync(dedupeBackupsBase)) {
+            return response.send({ backups: [] });
+        }
+
+        const entries = (await fs.promises.readdir(dedupeBackupsBase, { withFileTypes: true }))
+            .filter(e => e.isDirectory() && e.name.startsWith('chat_dedupe_'))
+            .map(e => e.name);
+
+        const backups = [];
+        for (const entry of entries) {
+            const manifestPath = path.join(dedupeBackupsBase, entry, 'manifest.json');
+            if (fs.existsSync(manifestPath)) {
+                const manifest = tryParse(tryReadFileSync(manifestPath));
+                if (manifest) {
+                    backups.push({
+                        backupId: entry,
+                        timestamp: manifest.timestamp || entry.replace('chat_dedupe_', ''),
+                        totalDeleted: manifest.totalDeleted || 0,
+                        freedBytes: manifest.freedBytes || 0,
+                        freedFormatted: formatBytes(manifest.freedBytes || 0),
+                        files: (manifest.files || []).map(f => f.file_name),
+                    });
+                }
+            }
+        }
+
+        backups.sort((a, b) => String(b.backupId).localeCompare(String(a.backupId)));
+        return response.send({ backups });
+    } catch (error) {
+        console.error('Chat dedupe backups error:', error);
+        return response.status(500).send({ error: error.message });
+    }
+});
+
+router.post('/dedupe/restore', async function (request, response) {
+    try {
+        const { backupId } = request.body || {};
+        if (!backupId) {
+            return response.status(400).send({ error: 'Missing backupId' });
+        }
+
+        const dedupeBackupsBase = path.join(request.user.directories.backups, 'chat_dedupe');
+        const backupDir = path.join(dedupeBackupsBase, sanitize(backupId));
+        const manifestPath = path.join(backupDir, 'manifest.json');
+
+        if (!fs.existsSync(manifestPath)) {
+            return response.status(404).send({ error: 'Backup manifest not found' });
+        }
+
+        const manifest = tryParse(tryReadFileSync(manifestPath));
+        if (!manifest || !Array.isArray(manifest.files)) {
+            return response.status(400).send({ error: 'Invalid backup manifest' });
+        }
+
+        let restoredCount = 0;
+        for (const item of manifest.files) {
+            const isGroup = !!item.is_group;
+            const fileName = item.file_name;
+            const dirName = isGroup ? '_groups' : String(item.avatar_url || '').replace('.png', '');
+            const sourceFilePath = path.join(backupDir, dirName, fileName);
+
+            const destDir = isGroup
+                ? request.user.directories.groupChats
+                : path.join(request.user.directories.chats, String(item.avatar_url || '').replace('.png', ''));
+            const destFilePath = path.join(destDir, fileName);
+
+            if (fs.existsSync(sourceFilePath)) {
+                fs.mkdirSync(destDir, { recursive: true });
+                fs.copyFileSync(sourceFilePath, destFilePath);
+                restoredCount++;
+            }
+        }
+
+        return response.send({ ok: true, restoredCount });
+    } catch (error) {
+        console.error('Chat dedupe restore error:', error);
+        return response.status(500).send({ error: error.message });
     }
 });

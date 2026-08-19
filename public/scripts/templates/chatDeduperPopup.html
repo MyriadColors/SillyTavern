@@ -1,0 +1,113 @@
+<div class="chat-deduper-dialog flex-container flexFlowColumn flex1">
+    <div class="chat-deduper-header flex-container justifySpaceBetween alignItemsCenter margin0 flexWrap" style="padding-bottom: 10px; border-bottom: 1px solid var(--SmartThemeBorderColor); gap: 10px;">
+        <div class="flex-container alignItemsCenter" style="gap: 10px;">
+            <i class="fa-solid fa-broom fa-xl"></i>
+            <div>
+                <h3 class="margin0" data-i18n="Chat Deduper & Cleanup">Chat Deduper & Cleanup</h3>
+                <small class="notes" data-i18n="Scan, review, and safely clean up duplicate or unused greeting chat files.">Scan, review, and safely clean up duplicate or unused greeting chat files.</small>
+            </div>
+        </div>
+        <div class="flex-container flexWrap" style="gap: 6px;">
+            <button id="chat_deduper_tab_clusters" class="menu_button chat-deduper-tab-btn active" title="Duplicate Clusters" data-i18n="[title]Duplicate Clusters">
+                <i class="fa-solid fa-list-check"></i> <span data-i18n="Clusters">Clusters</span>
+            </button>
+            <button id="chat_deduper_tab_settings" class="menu_button chat-deduper-tab-btn" title="Detection & Safety" data-i18n="[title]Detection & Safety">
+                <i class="fa-solid fa-shield-halved"></i> <span data-i18n="Safety & Settings">Safety & Settings</span>
+            </button>
+            <button id="chat_deduper_tab_backups" class="menu_button chat-deduper-tab-btn" title="Rollback & Backups" data-i18n="[title]Rollback & Backups">
+                <i class="fa-solid fa-clock-rotate-left"></i> <span data-i18n="Backups & Undo">Backups & Undo</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- TAB 1: DUPLICATE CLUSTERS -->
+    <div id="chat_deduper_page_clusters" class="chat-deduper-page flex-container flexFlowColumn flex1" style="overflow-y: auto; padding: 10px 0; gap: 12px; min-height: 0;">
+        <div class="chat-deduper-stats-bar flex-container justifySpaceBetween alignItemsCenter flexWrap highlight-block" style="padding: 10px 14px; border-radius: 8px; gap: 10px;">
+            <div class="flex-container alignItemsCenter flexWrap" style="gap: 12px;">
+                <div class="flex-container alignItemsCenter" style="gap: 6px;">
+                    <label class="notes" data-i18n="Scope:">Scope:</label>
+                    <select id="chat_deduper_scope_select" class="text_pole" style="padding: 2px 8px; min-width: 160px;">
+                        <option value="current" data-i18n="Current Character/Group">Current Character/Group</option>
+                        <option value="all" data-i18n="All Characters & Groups">All Characters & Groups</option>
+                    </select>
+                </div>
+                <div style="font-size: 0.9em; opacity: 0.9;">
+                    <span id="chat_deduper_stat_clusters" style="font-weight: bold; font-size: 1.1em;">0</span> <span data-i18n="Clusters">Clusters</span> &bull;
+                    <span id="chat_deduper_stat_duplicates" style="font-weight: bold; font-size: 1.1em;">0</span> <span data-i18n="Duplicates to Clean">Duplicates to Clean</span> &bull;
+                    <span id="chat_deduper_stat_freed" style="font-weight: bold; font-size: 1.1em;">0 B</span> <span data-i18n="Reclaimable">Reclaimable</span>
+                </div>
+            </div>
+            <div class="flex-container flexWrap" style="gap: 8px;">
+                <button id="chat_deduper_rescan_btn" class="menu_button menu_button_icon" title="Rescan for Duplicates" data-i18n="[title]Rescan for Duplicates">
+                    <i class="fa-solid fa-arrows-rotate"></i> <span data-i18n="Rescan">Rescan</span>
+                </button>
+                <button id="chat_deduper_select_all_btn" class="menu_button" style="font-size: 0.85em;" title="Select All Redundant Duplicates" data-i18n="[title]Select All Redundant Duplicates">
+                    <i class="fa-solid fa-square-check"></i> <span data-i18n="Select All">Select All</span>
+                </button>
+                <button id="chat_deduper_batch_cleanup_btn" class="menu_button popup-button-ok" title="Clean Up Selected Duplicate Chats" data-i18n="[title]Clean Up Selected Duplicate Chats">
+                    <i class="fa-solid fa-trash-can"></i> <span data-i18n="Clean Up Selected">Clean Up Selected</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="chat_deduper_clusters_container" class="flex-container flexFlowColumn" style="gap: 14px;">
+            <div class="chat-deduper-loading flex-container flexFlowColumn alignItemsCenter justifyCenter" style="padding: 40px 0; gap: 10px;">
+                <i class="fa-solid fa-spinner fa-spin fa-2xl"></i>
+                <span data-i18n="Scanning chats for duplicates...">Scanning chats for duplicates...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 2: DETECTION & SAFETY SETTINGS -->
+    <div id="chat_deduper_page_settings" class="chat-deduper-page flex-container flexFlowColumn flex1" style="display: none; overflow-y: auto; padding: 10px 0; gap: 14px; min-height: 0;">
+        <div class="highlight-block" style="padding: 12px 16px; border-radius: 8px;">
+            <h4 class="margin0" style="margin-bottom: 8px;"><i class="fa-solid fa-shield-cat"></i> <span data-i18n="Safety & Non-Destructive Protection">Safety & Non-Destructive Protection</span></h4>
+            <p class="notes margin0" style="margin-bottom: 12px;" data-i18n="Choose how duplicate chats are handled. Safe Trash ensures zero data loss by backing up deleted chats into backups/chat_dedupe/.">Choose how duplicate chats are handled. Safe Trash ensures zero data loss by backing up deleted chats into <code>backups/chat_dedupe/</code>.</p>
+
+            <div class="flex-container flexFlowColumn" style="gap: 8px;">
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="radio" name="chat_deduper_safe_mode" value="trash" checked />
+                    <div>
+                        <strong><span data-i18n="Safe Trash / Archive (Recommended)">Safe Trash / Archive (Recommended)</span></strong>
+                        <div class="notes" data-i18n="Moves duplicate chats to backups/chat_dedupe/ with manifest. 100% recoverable via Backups tab.">Moves duplicate chats to <code>backups/chat_dedupe/</code> with manifest. 100% recoverable via Backups tab.</div>
+                    </div>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="radio" name="chat_deduper_safe_mode" value="delete" />
+                    <div>
+                        <strong style="color: var(--crimson);"><span data-i18n="Permanent Deletion (Bypass Archive)">Permanent Deletion (Bypass Archive)</span></strong>
+                        <div class="notes" data-i18n="Permanently deletes duplicate .jsonl files without archiving.">Permanently deletes duplicate .jsonl files without archiving.</div>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <div class="highlight-block" style="padding: 12px 16px; border-radius: 8px;">
+            <h4 class="margin0" style="margin-bottom: 8px;"><i class="fa-solid fa-magnifying-glass"></i> <span data-i18n="Detection Types">Detection Types</span></h4>
+            <div class="flex-container flexFlowColumn" style="gap: 8px;">
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="chat_deduper_opt_greetings" checked />
+                    <span><strong data-i18n="Include Unused Greeting Chats">Include Unused Greeting Chats</strong> <small class="notes">(Chats containing only the initial greeting and 0 user messages)</small></span>
+                </label>
+                <label class="checkbox_label flex-container alignItemsCenter" style="gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="chat_deduper_opt_content" checked />
+                    <span><strong data-i18n="Include Exact Conversation Duplicates">Include Exact Conversation Duplicates</strong> <small class="notes">(Chats with 100% identical message history and content hash)</small></span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 3: ROLLBACK & BACKUPS -->
+    <div id="chat_deduper_page_backups" class="chat-deduper-page flex-container flexFlowColumn flex1" style="display: none; overflow-y: auto; padding: 10px 0; gap: 12px; min-height: 0;">
+        <div class="highlight-block" style="padding: 10px 14px; border-radius: 8px;">
+            <h4 class="margin0" style="margin-bottom: 4px;"><i class="fa-solid fa-clock-rotate-left"></i> <span data-i18n="Chat Deduplication Snapshots & 1-Click Restore">Chat Deduplication Snapshots & 1-Click Restore</span></h4>
+            <small class="notes" data-i18n="Every cleanup in Safe Trash mode creates an automatic snapshot. You can restore any past operation below.">Every cleanup in Safe Trash mode creates an automatic snapshot. You can restore any past operation below.</small>
+        </div>
+
+        <div id="chat_deduper_backups_container" class="flex-container flexFlowColumn" style="gap: 10px;">
+            <div class="flex-container justifyCenter alignItemsCenter" style="padding: 30px 0;">
+                <i class="fa-solid fa-spinner fa-spin fa-xl"></i>
+            </div>
+        </div>
+    </div>
+</div>
