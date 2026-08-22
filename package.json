@@ -127,6 +127,7 @@
         "start:no-csrf": "bun server.js --disableCsrf",
         "lint": "eslint \"src/**/*.js\" \"public/**/*.js\" ./*.js",
         "lint:fix": "eslint \"src/**/*.js\" \"public/**/*.js\" ./*.js --fix",
+        "backup": "bun backup.ts",
         "plugins:update": "bun plugins update",
         "plugins:install": "bun plugins install"
     },
