@@ -422,6 +422,34 @@ const processCharacter = async (item, directories, { shallow }) => {
         const { chatSize, dateLastChat } = calculateChatSize(chatsDirectory);
         character.chat_size = chatSize;
         character.date_last_chat = dateLastChat;
+
+        // Ensure character.chat references an existing chat file if any exist
+        if (fs.existsSync(chatsDirectory)) {
+            const chatFiles = fs.readdirSync(chatsDirectory, { withFileTypes: true })
+                .filter(file => file.isFile() && path.extname(file.name) === '.jsonl');
+
+            if (chatFiles.length > 0) {
+                const currentChatName = character.chat ? character.chat.replace('.jsonl', '') : '';
+                const currentChatExists = currentChatName && fs.existsSync(path.join(chatsDirectory, `${currentChatName}.jsonl`));
+                if (!currentChatExists) {
+                    let mostRecentFile = null;
+                    let mostRecentMtime = -1;
+                    for (const file of chatFiles) {
+                        const stat = fs.statSync(path.join(chatsDirectory, file.name));
+                        if (stat.mtimeMs > mostRecentMtime) {
+                            mostRecentMtime = stat.mtimeMs;
+                            mostRecentFile = file.name;
+                        }
+                    }
+                    if (mostRecentFile) {
+                        character.chat = path.parse(mostRecentFile).name;
+                    }
+                } else {
+                    character.chat = currentChatName;
+                }
+            }
+        }
+
         character.data_size = calculateDataSize(jsonObject?.data);
         return shallow ? toShallow(character) : character;
     } catch (err) {

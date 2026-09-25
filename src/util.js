@@ -777,17 +777,46 @@ export async function forwardFetchResponse(from, to) {
     }
 
     if (from.body && to.socket) {
+        from.body.on('error', function (err) {
+            const isExpectedAbort = err?.name === 'AbortError'
+                || err?.code === 'ERR_STREAM_PREMATURE_CLOSE'
+                || err?.code === 'ECONNRESET'
+                || (typeof err?.message === 'string' && err.message.includes('aborted'));
+
+            if (!isExpectedAbort) {
+                console.warn('Streaming response error:', err?.message || err);
+            }
+
+            if (!to.writableEnded) {
+                to.end();
+            }
+        });
+
+        to.on('error', function (err) {
+            const isExpectedAbort = err?.code === 'ERR_STREAM_PREMATURE_CLOSE'
+                || err?.code === 'ECONNRESET'
+                || (typeof err?.message === 'string' && err.message.includes('aborted'));
+
+            if (!isExpectedAbort) {
+                console.warn('Express response stream error:', err?.message || err);
+            }
+        });
+
         from.body.pipe(/** @type {NodeJS.WritableStream} */ (to));
 
         to.socket.on('close', function () {
             if (from.body instanceof Readable) from.body.destroy(); // Close the remote stream
 
-            to.end(); // End the Express response
+            if (!to.writableEnded) {
+                to.end(); // End the Express response
+            }
         });
 
         from.body.on('end', function () {
             console.info('Streaming request finished');
-            to.end();
+            if (!to.writableEnded) {
+                to.end();
+            }
         });
     } else {
         to.end();

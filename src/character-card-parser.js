@@ -109,7 +109,20 @@ export const read = (image) => {
             mergedData.extensions = { ...charaBaseline.extensions, ...v3Data.extensions };
         }
 
+        const topLevelProps = {};
+        for (const [key, value] of Object.entries(charaData)) {
+            if (key !== 'data' && key !== 'spec' && key !== 'spec_version') {
+                topLevelProps[key] = value;
+            }
+        }
+        for (const [key, value] of Object.entries(ccv3Data)) {
+            if (key !== 'data' && key !== 'spec' && key !== 'spec_version' && value !== undefined) {
+                topLevelProps[key] = value;
+            }
+        }
+
         const mergedCard = {
+            ...topLevelProps,
             spec: 'chara_card_v3',
             spec_version: ccv3Data.spec_version || '3.0',
             data: mergedData,

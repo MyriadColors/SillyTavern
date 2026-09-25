@@ -1,5 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { TavernCardValidator } from '../src/validator/TavernCardValidator';
+import { write, read } from '../src/character-card-parser.js';
 
 const V1_FIELDS = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example'];
 
@@ -318,6 +319,28 @@ describe('TavernCardValidator', () => {
             v.card = makeV1Card();
             v.validate();
             expect(v.lastValidationError).toBeNull();
+        });
+    });
+
+    describe('characterCardParser top-level metadata persistence', () => {
+        const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+
+        test('preserves top-level chat, create_date, and fav properties during dual-chunk read and write', () => {
+            const card = {
+                name: 'TestChar',
+                chat: 'TestChar - 2026-08-01 @12h 00m 00s',
+                create_date: '2026-08-01T12:00:00.000Z',
+                fav: true,
+                data: {
+                    name: 'TestChar',
+                    description: 'A test character',
+                },
+            };
+            const png = write(TINY_PNG, JSON.stringify(card));
+            const parsedJson = JSON.parse(read(png));
+            expect(parsedJson.chat).toBe('TestChar - 2026-08-01 @12h 00m 00s');
+            expect(parsedJson.create_date).toBe('2026-08-01T12:00:00.000Z');
+            expect(parsedJson.fav).toBe(true);
         });
     });
 });

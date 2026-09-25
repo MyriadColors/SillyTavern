@@ -7755,7 +7755,7 @@ export async function openCharacterChat(file_name) {
     chat_metadata = {};
     await getChat();
     $('#selected_chat_pole').val(file_name);
-    await createOrEditCharacter(new CustomEvent('newChat'));
+    await updateRemoteChatName(this_chid, file_name);
 }
 
 ////////// OPTIMZED MAIN API CHANGE FUNCTION ////////////
