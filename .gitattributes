@@ -1,0 +1,7 @@
+# Auto-detect text files and normalize to LF in the repository
+* text=auto eol=lf
+
+# Explicit overrides for binary files (optional)
+*.png binary
+*.jpg binary
+*.jar binary
