@@ -235,7 +235,7 @@ describe('getChatInfo', () => {
             fs.writeFileSync(filePath, '   \n\n   \n');
 
             const info = await getChatInfo(filePath);
-            expect(info).toEqual({});
+            expect(info.mes).toBe('[The message is empty]');
         } finally {
             warnSpy.mockRestore();
         }
@@ -244,17 +244,18 @@ describe('getChatInfo', () => {
     test('returns empty object for non-existent file', async () => {
         const filePath = path.join(tmpDir, 'missing.jsonl');
         const info = await getChatInfo(filePath);
-        expect(info).toEqual({});
+        expect(info).toEqual({ match: false });
     });
 
-    test('returns empty object and logs warning for corrupted file without valid chat headers', async () => {
+    test('returns degraded preview and logs warning for corrupted file without valid chat headers', async () => {
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
         try {
             const filePath = path.join(tmpDir, 'corrupted.jsonl');
             fs.writeFileSync(filePath, 'invalid non-json line\nanother corrupt line\n');
 
             const info = await getChatInfo(filePath);
-            expect(info).toEqual({});
+            expect(info.file_id).toBe('corrupted');
+            expect(info.mes).toBe('[The message is empty]');
             expect(warnSpy).toHaveBeenCalled();
         } finally {
             warnSpy.mockRestore();

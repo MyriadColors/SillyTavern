@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import process from 'node:process';
-import crypto from 'node:crypto';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
