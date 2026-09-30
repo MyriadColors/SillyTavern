@@ -1,5 +1,5 @@
 {
-  "lockfileVersion": 1,
+  "lockfileVersion": 3,
   "configVersion": 0,
   "workspaces": {
     "": {
@@ -136,6 +136,14 @@
         "eslint-plugin-playwright": "^2.3.0",
         "typescript": "^5.9.3",
       },
+    },
+  },
+  "overrides": {
+    "node-fetch": {
+      "whatwg-url": "^14.0.0",
+    },
+    "vectra": {
+      "openai": "^4.17.0",
     },
   },
   "packages": {

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -32,6 +33,23 @@ const checkIntegrity = !!getConfigValue('backups.chat.checkIntegrity', true, 'bo
 export const CHAT_BACKUPS_PREFIX = 'chat_';
 
 /**
+ * Builds a stable filename key for a chat's backups.
+ * Non-ASCII characters are replaced with underscores, so names such as CJK ones
+ * would all collapse to the same key and share one backup quota. A short hash of
+ * the raw name keeps those keys distinct while ASCII names stay unchanged (#5780).
+ * @param {string} name The name of the chat.
+ * @returns {string} Sanitized filename key for the backup files.
+ */
+export function getBackupKey(name) {
+    const sanitized = sanitize(name).replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    if (/[^\x20-\x7E]/.test(name)) {
+        const hash = crypto.createHash('sha256').update(name).digest('hex').slice(0, 8);
+        return `${sanitized}_${hash}`;
+    }
+    return sanitized;
+}
+
+/**
  * Saves a chat to the backups directory.
  * @param {string} directory The user's backup directory.
  * @param {string} name The name of the chat.
@@ -45,8 +63,7 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
         if (!fs.existsSync(directory)) {
             console.error(`The chat couldn't be backed up because no directory exists at ${directory}!`);
         }
-        // replace non-alphanumeric characters with underscores
-        name = sanitize(name).replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        name = getBackupKey(name);
 
         const backupFile = path.join(directory, `${backupPrefix}${name}_${generateTimestamp()}.jsonl`);
 
@@ -67,15 +84,19 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
 const backupFunctions = new Map();
 
 /**
- * Gets a backup function for a user.
+ * Gets a backup function for a user and chat.
+ * Throttling is keyed per user and chat so that rapid saves in one chat cannot
+ * swallow the throttled backup of another chat saved in the same window.
  * @param {string} handle User handle
+ * @param {string} name The name of the chat, as passed to backupChat
  * @returns {typeof backupChat} Backup function
  */
-function getBackupFunction(handle) {
-    if (!backupFunctions.has(handle)) {
-        backupFunctions.set(handle, _.throttle(backupChat, throttleInterval, { leading: true, trailing: true }));
+function getBackupFunction(handle, name) {
+    const key = `${handle} ${name}`;
+    if (!backupFunctions.has(key)) {
+        backupFunctions.set(key, _.throttle(backupChat, throttleInterval, { leading: true, trailing: true }));
     }
-    return backupFunctions.get(handle) || (() => { });
+    return backupFunctions.get(key) || (() => { });
 }
 
 /**
@@ -320,12 +341,25 @@ async function checkChatIntegrity(filePath, integritySlug) {
         return true;
     }
 
-    // Parse the first line of the chat file as JSON
+    // If the chat file is empty, there is nothing that could be lost by overwriting it
+    if (fs.statSync(filePath).size === 0) {
+        return true;
+    }
+
+    // Parse the first line of the chat file as JSON. Strip a UTF-8 BOM an external editor may have added.
     const firstLine = await readFirstLine(filePath);
-    const jsonData = tryParse(firstLine);
+    const jsonData = tryParse(String(firstLine ?? '').replace(/^\uFEFF/, ''));
+
+    // If the first line of a non-empty file is not a JSON object, the file may be corrupted or truncated.
+    // Fail the check so the client asks for an explicit overwrite confirmation instead of silently losing data.
+    if (typeof jsonData !== 'object' || jsonData === null || Array.isArray(jsonData)) {
+        console.warn(`File "${filePath}" is not empty, but its first line could not be parsed as a chat header. Overwriting it requires an explicit confirmation.`);
+        return false;
+    }
+
     const chatIntegrity = jsonData?.chat_metadata?.integrity;
 
-    // If the chat has no integrity metadata, assume it's intact
+    // If the chat has no integrity metadata, assume it's intact (legacy chats created before integrity checks existed)
     if (!chatIntegrity) {
         console.debug(`File "${filePath}" does not have integrity metadata matching "${integritySlug}". The integrity validation has been skipped.`);
         return true;
@@ -415,14 +449,23 @@ export class ChatMetadataCache {
  */
 export async function getChatInfo(pathToFile, additionalData = {}, withMetadata = false, matcher = null) {
     const parsedPath = path.parse(pathToFile);
+    const hasMatcher = (typeof matcher === 'function');
+
+    // A chat that is deleted while a scan is running is not an error: treat it like a corrupted chat and move on.
+    const chatVanished = () => {
+        console.warn('Chat file was deleted while it was being scanned:', pathToFile);
+        return { match: false };
+    };
+
     let stats;
     try {
         stats = await fs.promises.stat(pathToFile);
-    } catch {
-        return {};
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            return chatVanished();
+        }
+        throw error;
     }
-
-    const hasMatcher = (typeof matcher === 'function');
 
     if (!hasMatcher && !withMetadata) {
         const cached = ChatMetadataCache.get(pathToFile, stats);
@@ -459,9 +502,21 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
     let rl;
     try {
         fileStream = fs.createReadStream(pathToFile, { encoding: 'utf8' });
+        fileStream.on('error', (error) => {
+            if (error.code === 'ENOENT') {
+                return;
+            }
+        });
+
         rl = readline.createInterface({
             input: fileStream,
             crlfDelay: Infinity,
+        });
+
+        rl.on('error', (error) => {
+            if (error.code === 'ENOENT') {
+                return;
+            }
         });
 
         let lastLine;
@@ -498,15 +553,38 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
                 chatData.mes = jsonData.mes || '[The message is empty]';
                 chatData.last_mes = jsonData.send_date || new Date(Math.round(stats.mtimeMs)).toISOString();
                 chatData.match = hasMatcher ? hasAnyMatch : true;
+
+                if (!hasMatcher && !withMetadata) {
+                    ChatMetadataCache.set(pathToFile, stats, {
+                        isValid: true,
+                        fileId: chatData.file_id,
+                        fileName: chatData.file_name,
+                        fileSize: chatData.file_size,
+                        totalMessages: chatData.chat_items,
+                        previewMessage: chatData.mes,
+                        lastModifiedMs: typeof chatData.last_mes === 'number' ? chatData.last_mes : Date.parse(chatData.last_mes) || stats.mtimeMs,
+                    });
+                }
                 return chatData;
             } else {
-                console.warn('Found an invalid or corrupted chat file:', pathToFile);
-                return {};
+                // The last line is unparseable or lacks known fields (e.g. a truncated write or an external edit).
+                // Resolve a degraded preview from the stat data instead of hiding an otherwise intact chat
+                // from the chat list, search and recents.
+                console.warn('Found an invalid or corrupted last line in a chat file:', pathToFile);
+                // Exclude both the metadata line and the unreadable trailing line.
+                chatData.chat_items = Math.max(itemCounter - 2, 0);
+                chatData.mes = '[The message is empty]';
+                chatData.match = hasMatcher ? hasAnyMatch : true;
+                return chatData;
             }
+        } else {
+            // The file was truncated after the stat reported a non-zero size; treat it like an empty chat
+            return chatData;
         }
-
-        return chatData;
     } catch (error) {
+        if (error.code === 'ENOENT') {
+            return chatVanished();
+        }
         console.warn('Failed to read chat file info for:', pathToFile, error?.message);
         return {};
     } finally {
@@ -549,7 +627,7 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
         throw new IntegrityMismatchError(`Chat integrity check failed for "${filePath}". The expected integrity slug was "${chatIntegritySlug}".`);
     }
     tryWriteFileSync(filePath, jsonlData);
-    getBackupFunction(handle)(backupDirectory, cardName, jsonlData);
+    getBackupFunction(handle, cardName)(backupDirectory, cardName, jsonlData);
 }
 
 router.post('/save', validateAvatarUrlMiddleware, async function (request, response) {
