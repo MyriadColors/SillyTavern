@@ -80,17 +80,19 @@ if /i "!CHOICE!"=="r" (
 echo Staying on the current branch
 
 :update
+REM Merge, never rebase. Rebasing onto upstream replays every local commit and raises
+REM the same conflicts again for each one. See SyncUpstream.bat / sync-upstream.sh.
 REM Checking for 'upstream' remote
 git remote | findstr "upstream" > nul
 if %errorlevel% equ 0 (
-    echo Updating and rebasing against 'upstream'
+    echo Updating and merging against 'upstream'
     git fetch upstream
-    git rebase upstream/%TARGET_BRANCH% --autostash
+    git merge --no-edit upstream/%TARGET_BRANCH%
     goto install
 )
 
-echo Updating and rebasing against 'origin'
-git pull --rebase --autostash origin %TARGET_BRANCH%
+echo Updating and merging against 'origin'
+git pull --no-rebase --autostash origin %TARGET_BRANCH%
 
 
 :install
