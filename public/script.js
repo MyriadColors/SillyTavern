@@ -35,6 +35,8 @@ import {
     initTextGenSettings,
 } from './scripts/textgen-settings.js';
 
+import './scripts/greeting-image-cache.js';
+
 import {
     world_info,
     getWorldInfoPrompt,

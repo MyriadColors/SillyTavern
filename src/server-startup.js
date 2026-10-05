@@ -19,6 +19,7 @@ import { router as tokenizersRouter } from './endpoints/tokenizers.js';
 import { router as presetsRouter } from './endpoints/presets.js';
 import { router as secretsRouter } from './endpoints/secrets.js';
 import { router as thumbnailRouter } from './endpoints/thumbnails.js';
+import { apiRouter as greetingImageApiRouter, publicRouter as greetingImagePublicRouter } from './endpoints/greeting-images.js';
 import { router as novelAiRouter } from './endpoints/novelai.js';
 import { router as extensionsRouter } from './endpoints/extensions.js';
 import { router as assetsRouter } from './endpoints/assets.js';
@@ -153,6 +154,8 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/presets', presetsRouter);
     app.use('/api/secrets', secretsRouter);
     app.use('/thumbnail', thumbnailRouter);
+    app.use('/api/greeting-images', greetingImageApiRouter);
+    app.use('/greeting-images', greetingImagePublicRouter);
     app.use('/api/novelai', novelAiRouter);
     app.use('/api/extensions', extensionsRouter);
     app.use('/api/assets', assetsRouter);

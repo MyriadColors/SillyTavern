@@ -242,6 +242,27 @@ thumbnails:
   # Maximum thumbnail dimensions per type [width, height]
   dimensions: { 'bg': [160, 90], 'avatar': [96, 144], 'persona': [96, 144] }
 
+# PREFETCHING OF REMOTE IMAGES FOUND IN CHARACTER GREETINGS
+greetingImagePrefetch:
+  # Enable server-side downloading of remote images referenced in greetings.
+  enabled: true
+  # Hostnames the server is allowed to download images from on your behalf.
+  # Empty list = deny all (feature is inert until you add hosts here).
+  # Entries are exact hostnames, or domain suffixes such as ".imgur.com".
+  allowedDomains: []
+  # Allow suffix entries (".example.com") to match subdomains.
+  allowSubdomains: true
+  # Allow downloads from non-standard ports (host:8443).
+  allowNonStandardPorts: false
+  # Maximum size of a single downloaded image.
+  maxFileSize: '20mb'
+  # Maximum number of images downloaded per prefetch request.
+  maxFilesPerRequest: 16
+  # Soft cap on the total size of the per-user greeting image cache.
+  maxCacheSize: '512mb'
+  # Per-request download timeout in milliseconds.
+  timeout: 15000
+
 # PERFORMANCE-RELATED CONFIGURATION
 performance:
   # Enables lazy loading of character cards. Improves performances with large card libraries.
