@@ -1,9 +1,9 @@
 import { chat, getRequestHeaders, saveChatConditional, updateMessageBlock } from '../script.js';
 import { MessageFormatter } from './message-formatter.js';
-import { isExternalMediaAllowed } from './chats.js';
 import { power_user } from './power-user.js';
 
 const IN_FLIGHT = new Set();
+const TRANSPARENT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 async function prefetchUrls(messageId, urls) {
     const toFetch = urls.filter(url => !IN_FLIGHT.has(url));
@@ -18,11 +18,21 @@ async function prefetchUrls(messageId, urls) {
             body: JSON.stringify({ urls: toFetch }),
         });
 
-        if (!res.ok) return;
+        if (!res.ok) {
+            // Mark as failed so UI doesn't hang in loading state
+            const message = chat[messageId];
+            if (message) {
+                if (!message.extra) message.extra = {};
+                if (!message.extra.greetingImageMap) message.extra.greetingImageMap = {};
+                for (const url of toFetch) {
+                    message.extra.greetingImageMap[url] = null;
+                }
+                updateMessageBlock(messageId, message);
+            }
+            return;
+        }
 
         const data = await res.json();
-        if (!data.enabled) return;
-
         const message = chat[messageId];
         if (!message) return;
 
@@ -30,12 +40,24 @@ async function prefetchUrls(messageId, urls) {
         if (!message.extra) message.extra = {};
         if (!message.extra.greetingImageMap) message.extra.greetingImageMap = {};
 
+        if (!data.enabled) {
+            for (const url of toFetch) {
+                message.extra.greetingImageMap[url] = null;
+            }
+            updateMessageBlock(messageId, message);
+            return;
+        }
+
         for (const [url, result] of Object.entries(data.results)) {
             if (result.status === 'downloaded' || result.status === 'cached') {
                 if (result.path) {
                     message.extra.greetingImageMap[url] = result.path;
                     modified = true;
                 }
+            } else {
+                // Rejected or error - record as null to trigger fallback
+                message.extra.greetingImageMap[url] = null;
+                modified = true;
             }
         }
 
@@ -45,6 +67,15 @@ async function prefetchUrls(messageId, urls) {
         }
     } catch (err) {
         console.warn('Failed to prefetch greeting images:', err);
+        const message = chat[messageId];
+        if (message) {
+            if (!message.extra) message.extra = {};
+            if (!message.extra.greetingImageMap) message.extra.greetingImageMap = {};
+            for (const url of toFetch) {
+                message.extra.greetingImageMap[url] = null;
+            }
+            updateMessageBlock(messageId, message);
+        }
     } finally {
         for (const url of toFetch) IN_FLIGHT.delete(url);
     }
@@ -54,8 +85,8 @@ MessageFormatter.addHook((html, ctx) => {
     // Scope restriction: ONLY process greetings
     if (ctx.messageId !== 0) return html;
 
-    // Only process if prefetching is enabled and allowed
-    if (!isExternalMediaAllowed() || power_user.prefetch_greeting_images === false) {
+    // Only process if prefetching is enabled
+    if (power_user.prefetch_greeting_images === false) {
         return html;
     }
 
@@ -79,12 +110,13 @@ MessageFormatter.addHook((html, ctx) => {
                     // Already cached, use local path
                     img.setAttribute('src', map[src]);
                     modifiedDom = true;
+                } else if (map[src] === null) {
+                    // Prefetch failed or rejected, keep original src for fallback
                 } else {
-                    // Needs prefetching. Strip src to prevent browser fetch!
+                    // Needs prefetching. Use transparent pixel placeholder to avoid broken image display
                     urlsToFetch.add(src);
                     img.setAttribute('data-original-src', src);
-                    img.removeAttribute('src');
-                    img.setAttribute('alt', 'Prefetching image...');
+                    img.setAttribute('src', TRANSPARENT_PIXEL);
                     modifiedDom = true;
                 }
             }
@@ -104,6 +136,8 @@ MessageFormatter.addHook((html, ctx) => {
                     if (!url.startsWith(window.location.origin) && !url.includes('/greeting-images/')) {
                         if (map[url]) {
                             newSrcset.push(map[url] + rest);
+                        } else if (map[url] === null) {
+                            newSrcset.push(trimmed);
                         } else {
                             urlsToFetch.add(url);
                             needsPrefetch = true;
@@ -117,7 +151,7 @@ MessageFormatter.addHook((html, ctx) => {
             }
             if (needsPrefetch) {
                 img.setAttribute('data-original-srcset', srcset);
-                img.removeAttribute('srcset');
+                img.setAttribute('srcset', TRANSPARENT_PIXEL);
                 modifiedDom = true;
             } else if (newSrcset.length > 0 && newSrcset.length === parts.length) {
                 img.setAttribute('srcset', newSrcset.join(', '));
@@ -139,6 +173,8 @@ MessageFormatter.addHook((html, ctx) => {
                     if (map[url]) {
                         el.style.backgroundImage = `url("${map[url]}")`;
                         modifiedDom = true;
+                    } else if (map[url] === null) {
+                        // Prefetch failed or rejected, keep original
                     } else {
                         urlsToFetch.add(url);
                         el.setAttribute('data-original-bg', url);
