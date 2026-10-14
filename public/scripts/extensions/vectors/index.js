@@ -24,7 +24,8 @@ import {
 import { collapseNewlines, registerDebugFunction } from '../../power-user.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { getDataBankAttachments, getDataBankAttachmentsForSource, getFileAttachment } from '../../chats.js';
-import { debounce, getStringHash as calculateHash, waitUntilCondition, onlyUnique, splitRecursive, trimToStartSentence, trimToEndSentence, escapeHtml, isTrueBoolean } from '../../utils.js';
+import { debounce, getStringHash as calculateHash, waitUntilCondition, onlyUnique, trimToStartSentence, trimToEndSentence, escapeHtml, isTrueBoolean } from '../../utils.js';
+import { parseCustomDelimiters, splitSemantic } from '../../chunking.js';
 import { debounce_timeout } from '../../constants.js';
 import { getSortedEntries } from '../../world-info.js';
 import { textgen_types, textgenerationwebui_settings } from '../../textgen-settings.js';
@@ -80,7 +81,7 @@ const settings = {
     summary_prompt: 'Ignore previous instructions. Summarize the most important parts of the message. Limit yourself to 250 words or less. Your response should include nothing but the summary.',
     summary_retries: 2,
     summary_threshold: 200,
-    force_chunk_delimiter: '',
+    force_chunk_delimiters: '',
 
     // For chats
     enabled_chats: false,
@@ -277,17 +278,23 @@ async function onVectorizeAllClick() {
 let syncBlocked = false;
 
 /**
- * Gets the chunk delimiters for splitting text.
- * @returns {string[]} Array of chunk delimiters
+ * Gets the default fallback delimiters for splitting text.
+ * @returns {string[]} Array of default chunk delimiters
  */
-function getChunkDelimiters() {
-    const delimiters = ['\n\n', '\n', ' ', ''];
+function getDefaultDelimiters() {
+    return ['\n\n', '\n', ' ', ''];
+}
 
-    if (settings.force_chunk_delimiter) {
-        delimiters.unshift(settings.force_chunk_delimiter);
-    }
-
-    return delimiters;
+/**
+ * Parses the user-configured custom chunk boundaries (one per line).
+ * Each line is a plain literal separator (e.g. ---). Prefix with `line:`
+ * (e.g. `line:---`) to only split when the separator spans a whole line.
+ * @returns {import('../../chunking.js').ParsedChunkDelimiter[]} Parsed custom delimiters in priority order
+ */
+function getCustomDelimiters() {
+    // Backwards compatibility: single-string setting from older versions.
+    const raw = settings.force_chunk_delimiters ?? settings.force_chunk_delimiter ?? '';
+    return parseCustomDelimiters(raw);
 }
 
 /**
@@ -303,7 +310,7 @@ function splitByChunks(items) {
     const chunkedItems = [];
 
     for (const item of items) {
-        const chunks = splitRecursive(item.text, settings.message_chunk_size, getChunkDelimiters());
+        const chunks = splitSemantic(item.text, settings.message_chunk_size, getCustomDelimiters(), { fallbackDelimiters: getDefaultDelimiters() });
         for (const chunk of chunks) {
             const chunkedItem = { ...item, text: chunk };
             chunkedItems.push(chunkedItem);
@@ -738,13 +745,14 @@ async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overla
         const toastBody = $('<span>').text('This may take a while. Please wait...');
         toast = toastr.info(toastBody, `Ingesting file ${escapeHtml(fileName)}`, { closeButton: false, escapeHtml: false, timeOut: 0, extendedTimeOut: 0 });
         const overlapSize = Math.round(chunkSize * overlapPercent / 100);
-        const delimiters = getChunkDelimiters();
         // Overlap should not be included in chunk size. It will be later compensated by overlapChunks
         chunkSize = overlapSize > 0 ? (chunkSize - overlapSize) : chunkSize;
         const applyOverlap = (x, y, z) => overlapSize > 0 ? overlapChunks(x, y, z, overlapSize) : x;
-        const chunks = settings.only_custom_boundary && settings.force_chunk_delimiter
-            ? fileText.split(settings.force_chunk_delimiter).map(applyOverlap)
-            : splitRecursive(fileText, chunkSize, delimiters).map(applyOverlap);
+        const customDelimiters = getCustomDelimiters();
+        const hasCustomBoundary = customDelimiters.length > 0;
+        const chunks = (settings.only_custom_boundary && hasCustomBoundary)
+            ? splitSemantic(fileText, chunkSize, customDelimiters, { fallbackDelimiters: getDefaultDelimiters(), onlyCustom: true }).map(applyOverlap)
+            : splitSemantic(fileText, chunkSize, customDelimiters, { fallbackDelimiters: getDefaultDelimiters() }).map(applyOverlap);
         console.debug(`Vectors: Split file ${fileName} into ${chunks.length} chunks with ${overlapPercent}% overlap`, chunks);
 
         const items = chunks.map((chunk, index) => ({ hash: getStringHash(chunk), text: chunk, index: index }));
@@ -1739,6 +1747,17 @@ export async function init() {
 
     // Migrate from TensorFlow to Transformers
     settings.source = settings.source !== 'local' ? settings.source : 'transformers';
+
+    // Migrate single-string chunk boundary to the multi-delimiter list (one per line).
+    if ((settings.force_chunk_delimiters === undefined || settings.force_chunk_delimiters === '') && typeof settings.force_chunk_delimiter === 'string' && settings.force_chunk_delimiter) {
+        settings.force_chunk_delimiters = settings.force_chunk_delimiter;
+    }
+    if (Array.isArray(settings.force_chunk_delimiters)) {
+        settings.force_chunk_delimiters = settings.force_chunk_delimiters.join('\n');
+    }
+    delete settings.force_chunk_delimiter;
+    Object.assign(extension_settings.vectors, settings);
+    delete extension_settings.vectors.force_chunk_delimiter;
     const template = await renderExtensionTemplateAsync(MODULE_NAME, 'settings');
     $('#vectors_container').append(template);
     $('#vectors_enabled_chats').prop('checked', settings.enabled_chats).on('input', () => {
@@ -2025,8 +2044,8 @@ export async function init() {
         saveSettingsDebounced();
     });
 
-    $('#vectors_force_chunk_delimiter').val(settings.force_chunk_delimiter).on('input', () => {
-        settings.force_chunk_delimiter = String($('#vectors_force_chunk_delimiter').val());
+    $('#vectors_force_chunk_delimiter').val(settings.force_chunk_delimiters ?? '').on('input', () => {
+        settings.force_chunk_delimiters = String($('#vectors_force_chunk_delimiter').val());
         Object.assign(extension_settings.vectors, settings);
         saveSettingsDebounced();
     });
