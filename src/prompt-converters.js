@@ -1264,7 +1264,8 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
 
     function getGemini3FlashBudget() {
         // https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash
-        const noMinimalThinking = /gemini-3\.[78]-flash/.test(model);
+        // Gemini 4 Argon only supports low/medium/high thinking levels (no minimal).
+        const noMinimalThinking = /gemini-3\.[78]-flash|gemini-4/.test(model);
         switch (reasoningEffort) {
             case REASONING_EFFORT.auto:
                 return null;
@@ -1300,6 +1301,10 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
         }
 
         return null;
+    }
+
+    if (/gemini-4/.test(model)) {
+        return getGemini3FlashBudget();
     }
 
     if (/gemini-3[.\d]*-pro/.test(model)) {

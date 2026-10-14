@@ -207,6 +207,15 @@ describe('calculateGoogleBudgetTokens', () => {
         expect(mod.calculateGoogleBudgetTokens(8192, 'max', 'gemini-3-pro-image')).toBe('high');
     });
 
+    test('Gemini 4 Argon uses thinking levels without minimal', () => {
+        expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-4-argon')).toBeNull();
+        expect(mod.calculateGoogleBudgetTokens(8192, 'min', 'gemini-4-argon')).toBe('low');
+        expect(mod.calculateGoogleBudgetTokens(8192, 'low', 'gemini-4-argon')).toBe('low');
+        expect(mod.calculateGoogleBudgetTokens(8192, 'medium', 'gemini-4-argon')).toBe('medium');
+        expect(mod.calculateGoogleBudgetTokens(8192, 'high', 'gemini-4-argon')).toBe('high');
+        expect(mod.calculateGoogleBudgetTokens(8192, 'max', 'gemini-4-argon')).toBe('high');
+    });
+
     describe('gemini-3 pro', () => {
         test('auto returns null', () => expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-3.0-pro')).toBeNull());
         test('min returns low', () => expect(mod.calculateGoogleBudgetTokens(8192, 'min', 'gemini-3.0-pro')).toBe('low'));

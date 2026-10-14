@@ -235,7 +235,7 @@ router.post('/caption-image', async (request, response) => {
     try {
         const mimeType = request.body.image.split(';')[0].split(':')[1];
         const base64Data = request.body.image.split(',')[1];
-        const model = request.body.model || 'gemini-2.0-flash';
+        const model = request.body.model || 'gemini-3.8-flash';
         const { url, headers, apiName, safetySettings } = await getGoogleApiConfig(request, model);
 
         const body = {

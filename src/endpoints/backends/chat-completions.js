@@ -514,30 +514,30 @@ async function sendMakerSuiteRequest(request, response) {
     function getGeminiBody() {
         // #region UGLY MODEL LISTS AREA
         const imageGenerationModels = [
-            'gemini-2.0-flash-exp',
-            'gemini-2.0-flash-exp-image-generation',
-            'gemini-2.0-flash-preview-image-generation',
-            'gemini-2.5-flash-image-preview',
             'gemini-2.5-flash-image',
             'gemini-3-pro-image',
             'gemini-3.1-flash-image',
         ];
 
-        const isThinkingConfigModel = m => (/^gemini-2.5-(flash|pro)/.test(m) && !/-image(-preview)?$/.test(m)) || (/^gemini-3[.\d]*-(flash|pro)/.test(m));
+        const isThinkingConfigModel = m => (/^gemini-2.5-(flash|pro)/.test(m) && !/-image(-preview)?$/.test(m)) || (/^gemini-3[.\d]*-(flash|pro)/.test(m)) || (/^gemini-4/.test(m));
         const isImageSizeModel = m => /^gemini-3/.test(m);
         // https://ai.google.dev/gemini-api/docs/latest-model#api-changes-and-parameter-updates
-        const noSamplingModel = /gemini-3\.[678]-flash|gemini-3\.5-flash-lite/.test(model);
+        // Gemini 4 Argon ignores temperature/top_p/top_k/candidate_count.
+        const noSamplingModel = /gemini-3\.[678]-flash|gemini-3\.5-flash-lite|gemini-4/.test(model);
+        // Gemini 4 Argon does not support explicit thinking budgets, only thinking levels.
+        const isThinkingLevelOnlyModel = /^gemini-4/.test(model);
 
         const noSearchModels = [
-            'gemini-2.0-flash-lite',
-            'gemini-2.0-flash-lite-001',
-            'gemini-2.0-flash-lite-preview-02-05',
             'gemini-robotics-er-1.5-preview',
         ];
         // #endregion
 
         if (!Array.isArray(generationConfig.stopSequences) || !generationConfig.stopSequences.length) {
             delete generationConfig.stopSequences;
+        }
+
+        if (isThinkingLevelOnlyModel && (!Number.isFinite(generationConfig.maxOutputTokens) || generationConfig.maxOutputTokens < 32768)) {
+            generationConfig.maxOutputTokens = 32768;
         }
 
         if (noSamplingModel) {
@@ -604,7 +604,7 @@ async function sendMakerSuiteRequest(request, response) {
             const thinkingConfig = { includeThoughts: includeReasoning };
 
             const thinkingBudget = calculateGoogleBudgetTokens(generationConfig.maxOutputTokens, reasoningEffort, model);
-            if (typeof thinkingBudget === 'number' && Number.isInteger(thinkingBudget)) {
+            if (typeof thinkingBudget === 'number' && Number.isInteger(thinkingBudget) && !isThinkingLevelOnlyModel) {
                 thinkingConfig.thinkingBudget = thinkingBudget;
             }
 

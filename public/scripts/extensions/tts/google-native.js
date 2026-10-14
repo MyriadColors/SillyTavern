@@ -12,7 +12,7 @@ export class GoogleNativeTtsProvider {
 
     defaultSettings = {
         voiceMap: {},
-        model: 'gemini-3.1-flash-tts-preview',
+        model: 'gemini-3.8-flash-tts',
         apiType: 'makersuite',
     };
 
@@ -30,6 +30,8 @@ export class GoogleNativeTtsProvider {
             <div>
                 <label for="google-tts-model">Model:</label>
                 <select id="google-tts-model">
+                    <option value="gemini-3.8-flash-tts">Gemini 3.8 Flash TTS</option>
+                    <option value="gemini-3.8-flash-lite-tts">Gemini 3.8 Flash Lite TTS</option>
                     <option value="gemini-2.5-flash-preview-tts">Gemini 2.5 Flash Preview TTS</option>
                     <option value="gemini-2.5-pro-preview-tts">Gemini 2.5 Pro Preview TTS</option>
                     <option value="gemini-3.1-flash-tts-preview">Gemini 3.1 Flash TTS Preview</option>
@@ -44,6 +46,16 @@ export class GoogleNativeTtsProvider {
         }
 
         this.settings = { ...this.defaultSettings, ...settings };
+
+        // Migrate retired preview TTS models to the GA equivalent.
+        const ttsMigrations = {
+            'gemini-3.1-flash-tts-preview': 'gemini-3.8-flash-tts',
+            'gemini-2.5-flash-preview-tts': 'gemini-3.8-flash-tts',
+            'gemini-2.5-pro-preview-tts': 'gemini-3.8-flash-tts',
+        };
+        if (ttsMigrations[this.settings.model]) {
+            this.settings.model = ttsMigrations[this.settings.model];
+        }
 
         $('#google-tts-api-type').val(this.settings.apiType);
         $('#google-tts-model').val(this.settings.model);
