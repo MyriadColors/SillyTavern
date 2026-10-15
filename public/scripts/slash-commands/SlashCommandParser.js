@@ -42,6 +42,29 @@ export const PARSER_FLAG = {
 
 export class SlashCommandParser {
     /** @type {Object.<string, SlashCommand>} */ static commands = {};
+    /** @type {{name: string, existingSource: string, rejectedSource: string}[]} */ static duplicateSlashCommands = [];
+
+    /**
+     * Resolves the source of the caller registering a slash command from the stack trace.
+     * @returns {{isExtension: boolean, isThirdParty: boolean, source: string}} Source info
+     */
+    static resolveCommandSource() {
+        const stack = new Error().stack.split('\n').map(it => it.trim());
+        const isThirdParty = stack.find(it => it.includes('/scripts/extensions/third-party/')) != null;
+        const isExtension = isThirdParty || stack.find(it => it.includes('/scripts/extensions/')) != null;
+        let source = 'unknown';
+        if (isThirdParty) {
+            source = stack.find(it => it.includes('/scripts/extensions/third-party/')).replace(/^.*?\/scripts\/extensions\/third-party\/([^/]+)\/.*$/, '$1');
+        } else if (isExtension) {
+            source = stack.find(it => it.includes('/scripts/extensions/')).replace(/^.*?\/scripts\/extensions\/([^/]+)\/.*$/, '$1');
+        } else {
+            const idx = stack.findLastIndex(it => it.includes('at SlashCommandParser.')) + 1;
+            if (idx > 0 && idx < stack.length) {
+                source = stack[idx].replace(/^.*?\/((?:scripts\/)?(?:[^/]+)\.js).*$/, '$1');
+            }
+        }
+        return { isExtension, isThirdParty, source };
+    }
 
     /**
      * @deprecated Use SlashCommandParser.addCommandObject() instead.
@@ -59,8 +82,11 @@ export class SlashCommandParser {
         }));
     }
     /**
-     *
-     * @param {SlashCommand} command
+     * Registers a slash command. The first registration wins: if the name or
+     * any alias is already registered, the new command is rejected and the
+     * existing command is kept. Use addCommandObjectUnsafe to explicitly overwrite.
+     * @param {SlashCommand} command Command to register
+     * @returns {boolean} True if registered, false if rejected as a duplicate
      */
     static addCommandObject(command) {
         const reserved = ['/', '#', ':', 'parser-flag', 'breakpoint'];
@@ -69,28 +95,30 @@ export class SlashCommandParser {
                 throw new Error(`Illegal Name. Slash command name cannot begin with "${start}".`);
             }
         }
+        const collisions = [command.name, ...(command.aliases ?? [])].filter(x => Object.hasOwn(this.commands, x));
+        if (collisions.length > 0) {
+            const { isExtension, isThirdParty, source } = this.resolveCommandSource();
+            const existingSource = this.commands[collisions[0]]?.source ?? 'unknown';
+            console.error(`Duplicate slash command rejected: /${collisions.join(', /')} already registered by "${existingSource}". Rejected duplicate from "${source}". Rename the command with a unique prefix (e.g. extension slug).`, [command.name, ...(command.aliases ?? [])]);
+            this.duplicateSlashCommands.push(...collisions.map(name => ({ name, existingSource, rejectedSource: source })));
+            command.isExtension = isExtension;
+            command.isThirdParty = isThirdParty;
+            command.source = source;
+            return false;
+        }
         this.addCommandObjectUnsafe(command);
+        return true;
     }
     /**
-     *
-     * @param {SlashCommand} command
+     * Registers a slash command, overwriting any existing command with the same name or alias.
+     * Prefer addCommandObject unless overwriting is intentional.
+     * @param {SlashCommand} command Command to register
      */
     static addCommandObjectUnsafe(command) {
-        if ([command.name, ...command.aliases].some(x => Object.hasOwn(this.commands, x))) {
-            console.trace('WARN: Duplicate slash command registered!', [command.name, ...command.aliases]);
-        }
-
-        const stack = new Error().stack.split('\n').map(it => it.trim());
-        command.isExtension = stack.find(it => it.includes('/scripts/extensions/')) != null;
-        command.isThirdParty = stack.find(it => it.includes('/scripts/extensions/third-party/')) != null;
-        if (command.isThirdParty) {
-            command.source = stack.find(it => it.includes('/scripts/extensions/third-party/')).replace(/^.*?\/scripts\/extensions\/third-party\/([^/]+)\/.*$/, '$1');
-        } else if (command.isExtension) {
-            command.source = stack.find(it => it.includes('/scripts/extensions/')).replace(/^.*?\/scripts\/extensions\/([^/]+)\/.*$/, '$1');
-        } else {
-            const idx = stack.findLastIndex(it => it.includes('at SlashCommandParser.')) + 1;
-            command.source = stack[idx].replace(/^.*?\/((?:scripts\/)?(?:[^/]+)\.js).*$/, '$1');
-        }
+        const { isExtension, isThirdParty, source } = this.resolveCommandSource();
+        command.isExtension = isExtension;
+        command.isThirdParty = isThirdParty;
+        command.source = source;
 
         this.commands[command.name] = command;
 
@@ -309,7 +337,7 @@ export class SlashCommandParser {
                 getQuotedRunRegex(),
                 /\||$|(?=:})/,
             ],
-            className: {
+            beginScope: {
                 1: 'variable.language',
                 2: 'title.function.invoke',
             },
@@ -554,7 +582,6 @@ export class SlashCommandParser {
     /**
      * Moves the index <length> number of characters forward and returns the last character taken.
      * @param {number} length Number of characters to take.
-     * @param {boolean} keep Whether to add the characters to the kept text.
      * @returns The last character taken.
      */
     take(length = 1) {

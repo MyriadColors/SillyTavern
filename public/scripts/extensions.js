@@ -10,6 +10,7 @@ import { addLocaleData, getCurrentLocale, t } from './i18n.js';
 import { debounce_timeout } from './constants.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
+import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 
 export {
     getContext,
@@ -628,12 +629,17 @@ async function activateExtensions() {
         if (meetsModuleRequirements && meetsExtensionDeps && meetsClientMinimumVersion && !isDisabled) {
             try {
                 console.debug('Activating extension', name);
+                const duplicateCount = SlashCommandParser.duplicateSlashCommands.length;
                 const promise = addExtensionLocale(name, manifest).finally(() =>
                     Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
                 );
                 await promise
                     .then(() => {
                         activeExtensions.add(name);
+                        for (const duplicate of SlashCommandParser.duplicateSlashCommands.slice(duplicateCount)) {
+                            console.warn(`Extension "${displayName}" tried to register duplicate slash command "/${duplicate.name}" already registered by "${duplicate.existingSource}". Core command kept.`);
+                            extensionLoadErrors.add(t`Extension "${displayName}" tried to register duplicate slash command "/${duplicate.name}". Core command kept.`);
+                        }
                         return callExtensionHook(name, 'activate');
                     })
                     .catch(err => {
