@@ -1159,6 +1159,10 @@ function buildSearchFilterRow(defaultContainer, externalContainer) {
         ];
 
         for (const block of allBlocks) {
+            if (!(block instanceof HTMLElement)) {
+                continue;
+            }
+
             const text = [
                 block.querySelector('.extension_name')?.textContent,
                 block.querySelector('.extension_author')?.textContent,
@@ -1170,7 +1174,7 @@ function buildSearchFilterRow(defaultContainer, externalContainer) {
 
             const matchesQuery = !query || text.includes(query);
             const toggleInput = block.querySelector('input[type="checkbox"]');
-            const isEnabled = toggleInput?.checked ?? false;
+            const isEnabled = toggleInput instanceof HTMLInputElement ? toggleInput.checked : false;
             const matchesFilter =
                 activeFilter === 'all' ||
                 (activeFilter === 'enabled' && isEnabled) ||
