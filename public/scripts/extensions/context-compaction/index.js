@@ -11,12 +11,14 @@ import { ARGUMENT_TYPE, SlashCommandArgument } from '../../slash-commands/SlashC
 import {
     TRIGGER_MODES,
     THRESHOLD_MODES,
+    decideFire,
     estimateChatTokens,
+    resolvePruneTarget,
     resolveThreshold,
     shouldFire,
 } from './gate.js';
 import { applyCachedEvictions, planPrune } from './pruner.js';
-import { clearState, readState, setTurnsSince, writeState } from './cache.js';
+import { clearState, consumeForceArmed, readState, setTurnsSince, writeState } from './cache.js';
 
 export const MODULE_NAME = 'context_compaction';
 
@@ -152,21 +154,33 @@ async function onPromptReady(eventData) {
         const state = readState(context.chatMetadata);
         const estTokens = estimateChatTokens(eventData.chat);
         const thresholdTokens = resolveThreshold(settings, maxContext);
-        const decision = shouldFire({
+        // One-shot force: peek for dry runs, consume (disarm) on real generations.
+        // Pruner protections below are untouched; only this gate verdict is bypassed.
+        const forced = state.forceArmed === true;
+        const gateArgs = {
             estTokens,
             thresholdTokens,
             lastFiredAtTokens: state.lastFiredAtTokens,
             turnsSinceCompaction: state.turnsSinceCompaction,
             settings,
-        });
+        };
 
         if (eventData.dryRun) {
-            statusText = decision.fire
-                ? `Would compact (${decision.reason}): ~${estTokens} / ${thresholdTokens} tokens.`
-                : `No compaction needed: ~${estTokens} / ${thresholdTokens} tokens.`;
+            const preview = decideFire({ forced, ...gateArgs });
+            statusText = preview.fire
+                ? `Would compact (${preview.reason}): ~${estTokens} est. / ${thresholdTokens} tokens.`
+                : `No compaction needed: ~${estTokens} est. / ${thresholdTokens} tokens.`;
             renderStatus();
             return;
         }
+
+        if (forced) {
+            consumeForceArmed(context.chatMetadata);
+            if (typeof context.saveMetadataDebounced === 'function') {
+                context.saveMetadataDebounced();
+            }
+        }
+        const decision = decideFire({ forced, ...gateArgs });
 
         if (!decision.fire) {
             if (state.evictedHashes.length > 0) {
@@ -175,14 +189,15 @@ async function onPromptReady(eventData) {
                 eventData.chat.push(...filtered);
             }
             statusText = state.evictedHashes.length > 0
-                ? `Compacted earlier: ${state.evictedHashes.length} msgs pruned, ~${estTokens} tokens.`
-                : `No compaction: ~${estTokens} / ${thresholdTokens} tokens.`;
+                ? `Compacted earlier: ${state.evictedHashes.length} msgs pruned, ~${estTokens} est. tokens.`
+                : `No compaction: ~${estTokens} est. / ${thresholdTokens} tokens.`;
             renderStatus();
             return;
         }
 
         const tokenCounts = await countChatTokens(eventData.chat);
-        const targetTokens = Math.max(1, Math.round(thresholdTokens * 0.95));
+        const accurateTotal = tokenCounts.reduce((sum, count) => sum + (Number(count) || 0), 0);
+        const targetTokens = resolvePruneTarget({ estTokens, accurateTotal, thresholdTokens });
         const plan = planPrune(eventData.chat, {
             tokenCounts,
             targetTokens,
@@ -208,6 +223,7 @@ async function onPromptReady(eventData) {
             turnsSinceCompaction: 0,
             tokenSaved: plan.savedTokens,
             lastChatLength: Array.isArray(context.chat) ? context.chat.length : 0,
+            forceArmed: false,
         });
         if (typeof context.saveMetadataDebounced === 'function') {
             context.saveMetadataDebounced();
@@ -229,8 +245,12 @@ function bumpTurnCounter() {
         if (!context?.chatMetadata) {
             return;
         }
+        // One turn = one full player->NPC cycle: bump only on the NPC reply.
         const state = readState(context.chatMetadata);
         setTurnsSince(context.chatMetadata, state.turnsSinceCompaction + 1);
+        if (typeof context.saveMetadataDebounced === 'function') {
+            context.saveMetadataDebounced();
+        }
     } catch (error) {
         console.debug('[context-compaction] turn counter bump failed.', error);
     }
@@ -242,7 +262,9 @@ function onChatChanged() {
 }
 
 /**
- * Force a compaction on the next generation regardless of the gate.
+ * Arm a one-shot forced compaction for the next generation (any trigger mode).
+ * The flag is consumed on the next real generation; pruner protections
+ * (index 0, preserveN, tool chain, flags) still apply.
  * @returns {string} Status message
  */
 function forceCompact() {
@@ -253,11 +275,14 @@ function forceCompact() {
             return 'No active chat.';
         }
         const state = readState(context.chatMetadata);
-        setTurnsSince(context.chatMetadata, Math.max(state.turnsSinceCompaction, Number(getSettings().everyN) || 0));
-        statusText = 'Compaction forced for the next generation.';
+        writeState(context.chatMetadata, { ...state, forceArmed: true });
+        if (typeof context.saveMetadataDebounced === 'function') {
+            context.saveMetadataDebounced();
+        }
+        statusText = 'Compaction forced for the next generation (one-shot, all modes).';
         renderStatus();
         toastr.success(statusText, 'Context Compaction');
-        console.debug('[context-compaction] force armed.', state);
+        console.debug('[context-compaction] force armed.');
         return statusText;
     } catch (error) {
         console.warn('[context-compaction] force failed.', error);
@@ -335,14 +360,15 @@ async function buildStatusReport() {
     if (stChat.length === 0 || maxContext <= 0) {
         lines.push('No active chat or context size unknown — gate verdict unavailable.');
     } else {
-        const { tokens: estTokens, accurate } = await countChatAccurate(stChat);
-        const source = accurate ? 'tokenizer' : 'char estimate';
+        const gateEst = estimateChatTokens(stChat.map(mes => ({ content: typeof mes?.mes === 'string' ? mes.mes : '' })));
+        const { tokens: accurateTokens, accurate } = await countChatAccurate(stChat);
+        const accurateLabel = accurate ? 'tokenizer' : 'char-estimate fallback';
         const thresholdTokens = resolveThreshold(settings, maxContext);
-        const percent = Math.round((estTokens / maxContext) * 100);
+        const percent = Math.round((gateEst / maxContext) * 100);
         const thresholdLabel = settings.thresholdMode === THRESHOLD_MODES.ABSOLUTE
             ? `${thresholdTokens} tokens`
             : `${settings.thresholdPercent}% (~${thresholdTokens} tokens)`;
-        lines.push(`Context: ~${estTokens} tokens (${percent}% of ${maxContext} max) · threshold: ${thresholdLabel} · via ${source}`);
+        lines.push(`Context: ~${gateEst} tokens char estimate (gate unit, ${percent}% of ${maxContext} max) · tokenizer: ~${accurateTokens} tokens (${accurateLabel}) · threshold: ${thresholdLabel}`);
 
         const turns = Number(state?.turnsSinceCompaction ?? 0);
         const everyN = Number(settings.everyN) || 0;
@@ -353,7 +379,7 @@ async function buildStatusReport() {
             lines.push('Gate: OFF (extension disabled).');
         } else {
             const decision = shouldFire({
-                estTokens,
+                estTokens: gateEst,
                 thresholdTokens,
                 lastFiredAtTokens: state?.lastFiredAtTokens,
                 turnsSinceCompaction: turns,
@@ -364,22 +390,22 @@ async function buildStatusReport() {
             } else if (decision.reason === 'cooldown') {
                 lines.push(`Gate: cooling down (${turns}/${cooldownN} turns elapsed).`);
             } else if (decision.reason === 'hysteresis') {
-                lines.push(`Gate: holding (below re-fire floor after last compaction at ~${state?.lastFiredAtTokens} tokens).`);
+                lines.push(`Gate: holding (below re-fire floor after last compaction at ~${state?.lastFiredAtTokens} est. tokens).`);
             } else {
                 const gaps = [];
-                if (thresholdTokens > 0 && estTokens < thresholdTokens) {
-                    gaps.push(`~${thresholdTokens - estTokens} more tokens`);
+                if (thresholdTokens > 0 && gateEst < thresholdTokens) {
+                    gaps.push(`~${thresholdTokens - gateEst} more tokens (char estimate)`);
                 }
                 if (everyN > 0 && turns < everyN) {
                     gaps.push(`${everyN - turns} more turns`);
                 }
-                lines.push(`Gate: idle — needs ${gaps.length > 0 ? gaps.join(' or ') : 'a trigger'}${accurate ? '' : ' (char estimate, ±10%)'}.`);
+                lines.push(`Gate: idle — needs ${gaps.length > 0 ? gaps.join(' or ') : 'a trigger'} (char estimate, ±10%).`);
             }
         }
     }
 
     if (state?.evictedHashes?.length) {
-        lines.push(`Cache: ${state.evictedHashes.length} msgs pruned, ~${state.tokenSaved} tokens saved (fired at ~${state.lastFiredAtTokens} tokens).`);
+        lines.push(`Cache: ${state.evictedHashes.length} msgs pruned, ~${state.tokenSaved} tokenizer tokens saved (fired at ~${state.lastFiredAtTokens} est. tokens).`);
     } else {
         lines.push('Cache: empty — nothing pruned yet.');
     }
@@ -498,7 +524,7 @@ export async function init() {
 
     eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, onPromptReady);
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
-    eventSource.on(event_types.MESSAGE_SENT, bumpTurnCounter);
+    // One bump per NPC reply = one full player->NPC cycle per turn.
     eventSource.on(event_types.MESSAGE_RECEIVED, bumpTurnCounter);
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
@@ -507,7 +533,7 @@ export async function init() {
         unnamedArgumentList: [
             new SlashCommandArgument('action: force, clear, or status', [ARGUMENT_TYPE.STRING], false, false, ''),
         ],
-        helpString: 'Manage context compaction. Actions: force (compact on next generation), clear (drop cached evictions), status (show gate state).',
+        helpString: 'Manage context compaction. Actions: force (compact on the next generation only, in any trigger mode), clear (drop cached evictions), status (show gate state).',
         returns: 'compaction status text',
     }));
 }

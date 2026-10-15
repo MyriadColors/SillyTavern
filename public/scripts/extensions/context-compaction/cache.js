@@ -18,6 +18,8 @@ export function readState(chatMetadata) {
         turnsSinceCompaction: Number(state?.turnsSinceCompaction ?? 0),
         tokenSaved: Number(state?.tokenSaved) || 0,
         lastChatLength: Number(state?.lastChatLength) || 0,
+        // Absent in states written before force support: default disarmed.
+        forceArmed: state?.forceArmed === true,
     };
 }
 
@@ -37,11 +39,27 @@ export function writeState(chatMetadata, state) {
         turnsSinceCompaction: Number(state?.turnsSinceCompaction ?? 0),
         tokenSaved: Number(state?.tokenSaved) || 0,
         lastChatLength: Number(state?.lastChatLength) || 0,
+        forceArmed: state?.forceArmed === true,
     };
 }
 
 /**
- * Reset the turn counter while keeping the eviction list (used after sending a message).
+ * Consume the one-shot force flag: disarm it and report whether it was armed.
+ * Pruner protections are untouched; only the gate verdict is bypassed once.
+ * @param {object} chatMetadata chat_metadata object from context (mutated when armed)
+ * @returns {boolean} True if force was armed (now disarmed)
+ */
+export function consumeForceArmed(chatMetadata) {
+    const state = readState(chatMetadata);
+    if (!state.forceArmed) {
+        return false;
+    }
+    writeState(chatMetadata, { ...state, forceArmed: false });
+    return true;
+}
+
+/**
+ * Reset the turn counter while keeping the eviction list (used by the turn counter).
  * @param {object} chatMetadata chat_metadata object from context (mutated)
  * @param {number} turnsSinceCompaction Updated counter value
  */

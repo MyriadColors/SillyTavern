@@ -41,7 +41,7 @@
                 <span>Log compaction activity to console</span>
             </label>
             <div class="flex-container flexGap5">
-                <div id="compaction_force" class="menu_button menu_button_icon">
+                <div id="compaction_force" class="menu_button menu_button_icon" title="Compact the next generation only, in any trigger mode">
                     <i class="fa-solid fa-compress"></i>
                     <span>Compact next</span>
                 </div>
@@ -51,7 +51,7 @@
                 </div>
             </div>
             <small id="compaction_status" class="compaction_status"></small>
-            <small>Smart pruning runs only when the gate fires. Use <code>/ctx-compact status|force|clear</code> for manual control.</small>
+            <small>Smart pruning runs when the gate fires (1 turn = 1 player&rarr;NPC cycle). Compact next forces the next generation only, in any trigger mode. Use <code>/ctx-compact status|force|clear</code> for manual control.</small>
         </div>
     </div>
 </div>

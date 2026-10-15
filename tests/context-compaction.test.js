@@ -1,13 +1,15 @@
 import { describe, test, expect } from '@jest/globals';
 import {
     TRIGGER_MODES,
+    decideFire,
     estimateChatTokens,
+    resolvePruneTarget,
     resolveThreshold,
     shouldFire,
 } from '../public/scripts/extensions/context-compaction/gate.js';
 import { applyCachedEvictions, planPrune } from '../public/scripts/extensions/context-compaction/pruner.js';
 import { scoreMessage } from '../public/scripts/extensions/context-compaction/scorer.js';
-import { clearState, readState, writeState } from '../public/scripts/extensions/context-compaction/cache.js';
+import { clearState, consumeForceArmed, readState, setTurnsSince, writeState } from '../public/scripts/extensions/context-compaction/cache.js';
 
 describe('compaction gate', () => {
     test('fires on token threshold', () => {
@@ -116,5 +118,137 @@ describe('compaction cache', () => {
         expect(readState(metadata).evictedHashes).toEqual(['h1']);
         clearState(metadata);
         expect(readState(metadata).evictedHashes).toEqual([]);
+    });
+});
+
+describe('token-unit unification', () => {
+    test('gate fires but old plain target would miss; unified target prunes', () => {
+        // Char estimate (len/3.35 + 4/msg) deliberately overshoots the simulated
+        // accurate tokenizer counts, reproducing the gate/prune unit mismatch.
+        const chat = [{ role: 'system', content: 'You are a test character.' }];
+        for (let i = 0; i < 14; i++) {
+            chat.push({ role: 'user', content: `Filler message number ${i} ` + 'x'.repeat(335) });
+        }
+        chat.push({ role: 'user', content: 'Recent important question?' });
+        chat.push({ role: 'assistant', content: 'Recent answer to keep.' });
+
+        const estTokens = estimateChatTokens(chat);
+        const thresholdTokens = 1000;
+        const decision = shouldFire({
+            estTokens,
+            thresholdTokens,
+            lastFiredAtTokens: 0,
+            turnsSinceCompaction: 0,
+            settings: { triggerMode: TRIGGER_MODES.THRESHOLD, everyN: 0, cooldownN: 0 },
+        });
+        expect(decision).toEqual({ fire: true, reason: 'threshold' });
+
+        // Simulated accurate tokenizer counts: far below the char estimate.
+        const tokenCounts = chat.map(() => 10);
+        const accurateTotal = tokenCounts.reduce((sum, count) => sum + count, 0);
+        expect(estTokens).toBeGreaterThan(accurateTotal * 2);
+
+        // Old behavior: plain 0.95x threshold target already covers the accurate
+        // total, so planning against it prunes nothing despite the gate firing.
+        const plainTarget = Math.max(1, Math.round(thresholdTokens * 0.95));
+        const missed = planPrune(chat, {
+            tokenCounts,
+            targetTokens: plainTarget,
+            preserveN: 2,
+            flagsByIndex: new Map(),
+            aggressiveness: 'balanced',
+        });
+        expect(missed.evictedIndexes).toEqual([]);
+
+        // Unified target converts the estimated overshoot into accurate units.
+        const targetTokens = resolvePruneTarget({ estTokens, accurateTotal, thresholdTokens });
+        expect(targetTokens).toBeLessThan(accurateTotal);
+        const plan = planPrune(chat, {
+            tokenCounts,
+            targetTokens,
+            preserveN: 2,
+            flagsByIndex: new Map(),
+            aggressiveness: 'balanced',
+        });
+        expect(plan.evictedIndexes.length).toBeGreaterThan(0);
+        expect(accurateTotal - plan.savedTokens).toBeLessThanOrEqual(targetTokens);
+    });
+
+    test('resolvePruneTarget falls back to plain threshold without usable inputs', () => {
+        expect(resolvePruneTarget({ estTokens: 0, accurateTotal: 100, thresholdTokens: 1000 })).toBe(950);
+        expect(resolvePruneTarget({ estTokens: 1000, accurateTotal: 0, thresholdTokens: 1000 })).toBe(950);
+    });
+});
+
+describe('one-shot force and turn counter', () => {
+    const baseState = {
+        evictedHashes: [],
+        stub: '',
+        lastFiredAtTokens: 0,
+        turnsSinceCompaction: 0,
+        tokenSaved: 0,
+        lastChatLength: 5,
+    };
+
+    test('force fires in threshold mode far below threshold', () => {
+        const decision = decideFire({
+            forced: true,
+            estTokens: 100,
+            thresholdTokens: 8000,
+            lastFiredAtTokens: 0,
+            turnsSinceCompaction: 0,
+            settings: { triggerMode: TRIGGER_MODES.THRESHOLD, everyN: 0, cooldownN: 3 },
+        });
+        expect(decision).toEqual({ fire: true, reason: 'force' });
+    });
+
+    test('unforced decision still defers to the gate', () => {
+        const decision = decideFire({
+            forced: false,
+            estTokens: 100,
+            thresholdTokens: 8000,
+            lastFiredAtTokens: 0,
+            turnsSinceCompaction: 0,
+            settings: { triggerMode: TRIGGER_MODES.THRESHOLD, everyN: 0, cooldownN: 0 },
+        });
+        expect(decision.fire).toBe(false);
+    });
+
+    test('force disarms after one consume (second generation idle)', () => {
+        const metadata = {};
+        writeState(metadata, { ...baseState, forceArmed: true });
+        expect(consumeForceArmed(metadata)).toBe(true);
+        expect(readState(metadata).forceArmed).toBe(false);
+        expect(consumeForceArmed(metadata)).toBe(false);
+    });
+
+    test('consume preserves the rest of the state', () => {
+        const metadata = {};
+        writeState(metadata, { ...baseState, evictedHashes: ['h1'], tokenSaved: 42, forceArmed: true });
+        consumeForceArmed(metadata);
+        const state = readState(metadata);
+        expect(state.evictedHashes).toEqual(['h1']);
+        expect(state.tokenSaved).toBe(42);
+    });
+
+    test('legacy state without the flag reads disarmed', () => {
+        expect(readState({ context_compaction: { turnsSinceCompaction: 2 } }).forceArmed).toBe(false);
+        expect(readState({}).forceArmed).toBe(false);
+    });
+
+    test('one simulated exchange advances the counter by exactly 1', () => {
+        const metadata = {};
+        writeState(metadata, { ...baseState, turnsSinceCompaction: 3 });
+        const state = readState(metadata);
+        setTurnsSince(metadata, state.turnsSinceCompaction + 1);
+        expect(readState(metadata).turnsSinceCompaction).toBe(4);
+    });
+
+    test('force flag round-trips through writeState/readState', () => {
+        const metadata = {};
+        writeState(metadata, { ...baseState, forceArmed: true });
+        expect(readState(metadata).forceArmed).toBe(true);
+        writeState(metadata, { ...readState(metadata), forceArmed: false });
+        expect(readState(metadata).forceArmed).toBe(false);
     });
 });

@@ -74,6 +74,34 @@ export function resolveThreshold(settings, maxContext) {
 }
 
 /**
+ * Resolve the prune target in accurate-tokenizer units from the char-estimate gate.
+ *
+ * Unit-unification choice: the gate stays on the fast char estimate (hot path,
+ * plus a +4/message overhead that countChatTokens lacks), while pruning works
+ * from accurate per-message tokenizer counts. To keep the two in agreement, the
+ * estimated overshoot above 0.95x threshold is converted into accurate units
+ * via the estimate-to-accurate ratio, i.e. target = 0.95 * threshold * ratio.
+ * When the estimate undercounts (ratio >= 1) this reduces to the plain
+ * 0.95 * threshold real-token goal via the min() clamp.
+ * @param {object} args Resolution inputs
+ * @param {number} args.estTokens Gate char-estimate total (gate unit)
+ * @param {number} args.accurateTotal Sum of accurate per-message counts (prune unit)
+ * @param {number} args.thresholdTokens Resolved absolute threshold (real-token unit)
+ * @returns {number} Prune target in accurate-tokenizer units
+ */
+export function resolvePruneTarget({ estTokens, accurateTotal, thresholdTokens }) {
+    const threshold = Number(thresholdTokens) || 0;
+    const plain = Math.max(1, Math.round(threshold * 0.95));
+    const est = Number(estTokens) || 0;
+    const accurate = Number(accurateTotal) || 0;
+    if (threshold <= 0 || est <= 0 || accurate <= 0) {
+        return plain;
+    }
+    const scaled = Math.max(1, Math.round(threshold * 0.95 * (accurate / est)));
+    return Math.min(plain, scaled);
+}
+
+/**
  * Check the cooldown (minimum turns between compactions).
  * @param {number} turnsSinceCompaction Turns since last compaction
  * @param {number} cooldownN Minimum turns required
@@ -85,6 +113,26 @@ export function isCooldownOk(turnsSinceCompaction, cooldownN) {
         return true;
     }
     return Number(turnsSinceCompaction ?? 0) >= cooldown;
+}
+
+/**
+ * Decide whether compaction should run now, honoring the one-shot force flag.
+ * Force bypasses the gate (any trigger mode, below threshold, in cooldown) for
+ * exactly one generation; pruner protections still apply downstream.
+ * @param {object} args Gate inputs (see shouldFire) plus force flag
+ * @param {boolean} args.forced True when a one-shot force was armed
+ * @param {number} args.estTokens Estimated prompt tokens
+ * @param {number} args.thresholdTokens Resolved absolute threshold (0 = disabled)
+ * @param {number} args.lastFiredAtTokens Token level when compaction last fired (hysteresis)
+ * @param {number} args.turnsSinceCompaction Turns since last compaction
+ * @param {object} args.settings Extension settings
+ * @returns {{fire: boolean, reason: string}} Gate decision
+ */
+export function decideFire({ forced, estTokens, thresholdTokens, lastFiredAtTokens, turnsSinceCompaction, settings }) {
+    if (forced === true) {
+        return { fire: true, reason: 'force' };
+    }
+    return shouldFire({ estTokens, thresholdTokens, lastFiredAtTokens, turnsSinceCompaction, settings });
 }
 
 /**
