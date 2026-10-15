@@ -8,7 +8,8 @@ import {
     shouldFire,
 } from '../public/scripts/extensions/context-compaction/gate.js';
 import { applyCachedEvictions, planPrune } from '../public/scripts/extensions/context-compaction/pruner.js';
-import { scoreMessage } from '../public/scripts/extensions/context-compaction/scorer.js';
+import { hashChatMessages, hashMessage, scoreMessage } from '../public/scripts/extensions/context-compaction/scorer.js';
+import { resolveFlags } from '../public/scripts/extensions/context-compaction/flags.js';
 import { clearState, consumeForceArmed, readState, setTurnsSince, writeState } from '../public/scripts/extensions/context-compaction/cache.js';
 
 describe('compaction gate', () => {
@@ -250,5 +251,93 @@ describe('one-shot force and turn counter', () => {
         expect(readState(metadata).forceArmed).toBe(true);
         writeState(metadata, { ...readState(metadata), forceArmed: false });
         expect(readState(metadata).forceArmed).toBe(false);
+    });
+});
+
+describe('hash robustness', () => {
+    test('speaker name disambiguates identical text', () => {
+        const alice = hashMessage({ role: 'user', name: 'Alice', content: 'Hello there' });
+        const bob = hashMessage({ role: 'user', name: 'Bob', content: 'Hello there' });
+        expect(alice).not.toBe(bob);
+    });
+
+    test('array content normalizes like the token counters', () => {
+        const fromParts = hashMessage({ role: 'user', content: [{ text: 'ab' }, { text: 'cd' }] });
+        const fromString = hashMessage({ role: 'user', content: 'abcd' });
+        expect(fromParts).toBe(fromString);
+    });
+
+    test('duplicate messages hash distinctly and stably under append', () => {
+        const filler = { role: 'user', content: 'Same filler repeated.' };
+        const chat = [{ role: 'system', content: 'Intro.' }, { ...filler }, { ...filler }, { ...filler }];
+        const hashes = hashChatMessages(chat);
+        expect(new Set(hashes).size).toBe(hashes.length);
+        const extended = hashChatMessages([...chat, { role: 'assistant', content: 'A new reply.' }]);
+        expect(extended.slice(0, hashes.length)).toEqual(hashes);
+    });
+
+    test('duplicate chat evicts exactly the planned count', () => {
+        const chat = [{ role: 'system', content: 'You are a test character.' }];
+        for (let i = 0; i < 5; i++) {
+            chat.push({ role: 'user', content: 'Identical filler repeated over and over.' });
+        }
+        chat.push({ role: 'user', content: 'Recent important question?' });
+        chat.push({ role: 'assistant', content: 'Recent answer to keep.' });
+
+        const tokenCounts = chat.map(() => 10);
+        const plan = planPrune(chat, {
+            tokenCounts,
+            targetTokens: 65,
+            preserveN: 2,
+            flagsByIndex: new Map(),
+            aggressiveness: 'balanced',
+        });
+        expect(plan.evictedIndexes).toHaveLength(2);
+        const filtered = applyCachedEvictions(chat, plan.evictedHashes, plan.stub);
+        expect(filtered).toHaveLength(chat.length - 2 + 1);
+        const remaining = filtered.filter(message => message.content === 'Identical filler repeated over and over.');
+        expect(remaining).toHaveLength(3);
+    });
+});
+
+describe('flag attribution', () => {
+    test('pin on a repeated opener lands on the right message', () => {
+        const stChat = [0, 1, 2, 3].map(index => ({
+            mes: 'Shall we begin?',
+            is_user: true,
+            ...(index === 2 ? { pinned: true } : {}),
+        }));
+        const chat = [{ role: 'system', content: 'Intro.' }];
+        for (let i = 0; i < 4; i++) {
+            chat.push({ role: 'user', content: 'Shall we begin?' });
+        }
+        const flags = resolveFlags(chat, stChat);
+        expect(flags.size).toBe(1);
+        expect(flags.get(3)).toEqual({ pinned: true });
+    });
+
+    test('speaker-prefixed prompt content matches the bare ST text', () => {
+        const stChat = [{ mes: 'hello there', name: 'Alice', is_user: false, extra: { isImportant: true } }];
+        const chat = [{ role: 'assistant', name: 'Alice', content: 'Alice: hello there' }];
+        expect(resolveFlags(chat, stChat).get(0)).toEqual({ important: true });
+    });
+
+    test('non-string prompt content is skipped explicitly', () => {
+        const stChat = [{ mes: 'hello', is_user: true, pinned: true }];
+        const chat = [{ role: 'user', content: [{ text: 'hello' }] }];
+        expect(resolveFlags(chat, stChat).size).toBe(0);
+    });
+
+    test('truncation fallback only uses unconsumed messages', () => {
+        const full = 'o'.repeat(200);
+        const truncated = full.slice(0, 150);
+        const stChat = [{ mes: full, is_user: true, pinned: true }];
+        const chat = [
+            { role: 'user', content: truncated },
+            { role: 'user', content: truncated },
+        ];
+        const flags = resolveFlags(chat, stChat);
+        expect(flags.get(0)).toEqual({ pinned: true });
+        expect(flags.has(1)).toBe(false);
     });
 });

@@ -1,7 +1,7 @@
 /**
  * Eviction planner and cached-filter applier. DOM-free so it can be unit tested.
  */
-import { extractKeywords, hashMessage, scoreMessage } from './scorer.js';
+import { extractKeywords, hashChatMessages, scoreMessage } from './scorer.js';
 
 /**
  * Decide which messages to evict to get under the token target.
@@ -79,7 +79,8 @@ export function planPrune(chat, { tokenCounts, targetTokens, preserveN, flagsByI
         return { evictedIndexes: [], evictedHashes: [], stub: '', savedTokens: 0 };
     }
 
-    const evictedHashes = evictedIndexes.map(index => hashMessage(messages[index]));
+    const hashes = hashChatMessages(messages);
+    const evictedHashes = evictedIndexes.map(index => hashes[index]);
     const texts = evictedIndexes.map(index => {
         const content = messages[index]?.content;
         return typeof content === 'string' ? content : JSON.stringify(content ?? '');
@@ -104,13 +105,14 @@ export function applyCachedEvictions(chat, evictedHashes, stub) {
         return [...messages];
     }
     const evicted = new Set(evictedHashes);
+    const hashes = hashChatMessages(messages);
     const kept = [];
     let stubInserted = false;
     let firstEvictedIndex = -1;
     const remaining = [];
 
     for (let index = 0; index < messages.length; index++) {
-        if (evicted.has(hashMessage(messages[index]))) {
+        if (evicted.has(hashes[index])) {
             if (firstEvictedIndex === -1) {
                 firstEvictedIndex = kept.length;
             }

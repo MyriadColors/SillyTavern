@@ -185,6 +185,37 @@ describe('synthetic compaction: tavern fixture', () => {
         clearState(metadata);
         expect(readState(metadata).evictedHashes).toEqual([]);
     });
+
+    test('duplicates evict exactly the planned count while protections hold', () => {
+        const fillerIndex = chat.findIndex((message, index) =>
+            index > 0 && index < chat.length - SETTINGS.preserveN
+            && !flagsByIndex.has(index) && !message?.tool_calls && message?.role !== 'tool',
+        );
+        expect(fillerIndex).toBeGreaterThan(0);
+        const duped = [
+            ...chat.slice(0, fillerIndex + 1),
+            { ...chat[fillerIndex] },
+            { ...chat[fillerIndex] },
+            ...chat.slice(fillerIndex + 1),
+        ];
+        const dupedCounts = duped.map(message => estimateChatTokens([message]));
+        const dupedTotal = dupedCounts.reduce((sum, count) => sum + count, 0);
+        const dupedFlags = new Map();
+        for (const [index, entry] of flagsByIndex) {
+            dupedFlags.set(index > fillerIndex ? index + 2 : index, entry);
+        }
+        const plan = planPrune(duped, {
+            tokenCounts: dupedCounts,
+            targetTokens: Math.floor(dupedTotal * 0.5),
+            preserveN: SETTINGS.preserveN,
+            flagsByIndex: dupedFlags,
+            aggressiveness: SETTINGS.aggressiveness,
+        });
+        expect(plan.evictedIndexes.length).toBeGreaterThan(0);
+        expect(plan.evictedIndexes).not.toContain(0);
+        const filtered = applyCachedEvictions(duped, plan.evictedHashes, plan.stub);
+        expect(filtered).toHaveLength(duped.length - plan.evictedIndexes.length + 1);
+    });
 });
 
 describe('synthetic compaction: 205-turn soak', () => {

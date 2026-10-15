@@ -18,6 +18,7 @@ import {
     shouldFire,
 } from './gate.js';
 import { applyCachedEvictions, planPrune } from './pruner.js';
+import { resolveFlags } from './flags.js';
 import { clearState, consumeForceArmed, readState, setTurnsSince, writeState } from './cache.js';
 
 export const MODULE_NAME = 'context_compaction';
@@ -76,53 +77,6 @@ async function countChatTokens(chat) {
         }
     }
     return counts;
-}
-
-/**
- * Resolve importance flags for each prompt message by matching ST chat content.
- * @param {Array<object>} chat Chat-completion messages
- * @param {Array<object>} stChat ST chat messages
- * @returns {Map<number, object>} Flags per prompt index
- */
-function resolveFlags(chat, stChat) {
-    const flags = new Map();
-    if (!Array.isArray(stChat) || stChat.length === 0) {
-        return flags;
-    }
-    const byText = new Map();
-    for (const mes of stChat) {
-        if (typeof mes?.mes === 'string' && mes.mes.length > 0) {
-            const key = mes.mes.slice(0, 120);
-            if (!byText.has(key)) {
-                byText.set(key, mes);
-            }
-        }
-    }
-    chat.forEach((message, index) => {
-        const content = typeof message?.content === 'string' ? message.content : '';
-        if (!content) {
-            return;
-        }
-        const stMessage = byText.get(content.slice(0, 120));
-        if (!stMessage) {
-            return;
-        }
-        const entry = {};
-        if (stMessage?.extra?.isImportant) {
-            entry.important = true;
-        }
-        if (stMessage?.pinned || stMessage?.is_pinned) {
-            entry.pinned = true;
-        }
-        const extra = stMessage?.extra;
-        if (extra?.image || extra?.images || extra?.attachments || extra?.file) {
-            entry.hasAttachment = true;
-        }
-        if (Object.keys(entry).length > 0) {
-            flags.set(index, entry);
-        }
-    });
-    return flags;
 }
 
 function renderStatus() {

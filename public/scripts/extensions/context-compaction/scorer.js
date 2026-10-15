@@ -97,18 +97,56 @@ export function extractKeywords(texts, limit = 6) {
 }
 
 /**
+ * Normalize message content to plain text, identically to the token counters
+ * in gate.js / index.js: strings as-is, arrays joined from part.text.
+ * @param {object} message Chat message ({role, content, name})
+ * @returns {string} Normalized text
+ */
+export function normalizeMessageText(message) {
+    const content = message?.content;
+    if (typeof content === 'string') {
+        return content;
+    }
+    if (Array.isArray(content)) {
+        return content.map(part => (typeof part?.text === 'string' ? part.text : '')).join('');
+    }
+    return '';
+}
+
+/**
  * Build a djb2 content hash used to recognize evicted messages across generations.
- * @param {object} message Chat message
+ * Includes role, name, and the occurrence index among identical messages so
+ * duplicates hash distinctly and cached evictions remove exactly the planned
+ * count instead of every identical message. Old hashes (without name and
+ * occurrence) never match: a single refire replans and rewrites the cache.
+ * @param {object} message Chat message ({role, content, name})
+ * @param {number} [occurrence] Zero-based index among identical messages in the chat
  * @returns {string} Hash string
  */
-export function hashMessage(message) {
-    const content = typeof message?.content === 'string'
-        ? message.content
-        : JSON.stringify(message?.content ?? '');
-    const input = `${message?.role ?? ''}:${content}`;
+export function hashMessage(message, occurrence = 0) {
+    const input = `${message?.role ?? ''}:${message?.name ?? ''}:${normalizeMessageText(message)}:${Number(occurrence) || 0}`;
     let hash = 5381;
     for (let i = 0; i < input.length; i++) {
         hash = ((hash << 5) + hash + input.charCodeAt(i)) >>> 0;
     }
     return `h${hash.toString(36)}`;
+}
+
+/**
+ * Hash a whole chat array with per-index duplicate disambiguation.
+ * The occurrence counts are append-stable: messages appended at the end never
+ * renumber existing ones. Both planPrune and applyCachedEvictions must use
+ * this helper so planning and filtering always agree.
+ * @param {Array<object>} chat Chat-completion messages
+ * @returns {string[]} Disambiguated hash per index
+ */
+export function hashChatMessages(chat) {
+    const messages = Array.isArray(chat) ? chat : [];
+    const seen = new Map();
+    return messages.map(message => {
+        const base = `${message?.role ?? ''}:${message?.name ?? ''}:${normalizeMessageText(message)}`;
+        const occurrence = seen.get(base) ?? 0;
+        seen.set(base, occurrence + 1);
+        return hashMessage(message, occurrence);
+    });
 }
