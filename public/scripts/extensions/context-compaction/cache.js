@@ -70,6 +70,49 @@ export function setTurnsSince(chatMetadata, turnsSinceCompaction) {
 }
 
 /**
+ * Revalidate cached evictions against the current chat length.
+ * Any edit or delete shifts occurrence numbering, so cached hashes can no
+ * longer be trusted: a shorter chat (or an explicit force after an edit)
+ * drops the whole cache. Otherwise the length marker is refreshed.
+ * @param {object} chatMetadata chat_metadata object from context (mutated)
+ * @param {number} chatLength Current ST chat length
+ * @param {boolean} [force] True when the chat was edited without shrinking
+ * @returns {boolean} True when cached evictions were dropped
+ */
+export function revalidateState(chatMetadata, chatLength, force = false) {
+    const state = readState(chatMetadata);
+    if (state.evictedHashes.length === 0) {
+        // Never-compacted chats stay metadata-free; only refresh the marker
+        // when a state entry already exists.
+        if (chatMetadata?.[METADATA_KEY]) {
+            touchChatLength(chatMetadata, chatLength);
+        }
+        return false;
+    }
+    if (force === true || Number(chatLength) < state.lastChatLength) {
+        clearState(chatMetadata);
+        return true;
+    }
+    touchChatLength(chatMetadata, chatLength);
+    return false;
+}
+
+/**
+ * Refresh the chat-length staleness marker without touching evictions.
+ * @param {object} chatMetadata chat_metadata object from context (mutated)
+ * @param {number} chatLength Current ST chat length
+ */
+export function touchChatLength(chatMetadata, chatLength) {
+    const length = Number(chatLength) || 0;
+    const state = readState(chatMetadata);
+    if (state.lastChatLength === length) {
+        return;
+    }
+    state.lastChatLength = length;
+    writeState(chatMetadata, state);
+}
+
+/**
  * Clear compaction state for the current chat (used by /compact clear and chat change).
  * @param {object} chatMetadata chat_metadata object from context (mutated)
  */

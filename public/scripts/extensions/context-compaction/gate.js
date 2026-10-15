@@ -136,6 +136,22 @@ export function decideFire({ forced, estTokens, thresholdTokens, lastFiredAtToke
 }
 
 /**
+ * Clamp a settings number into range, falling back on non-numeric input.
+ * @param {any} value Raw input value
+ * @param {number} min Minimum allowed value
+ * @param {number} max Maximum allowed value
+ * @param {number} fallback Value to use when input is not a finite number
+ * @returns {number} Clamped value
+ */
+export function clampInt(value, min, max, fallback) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return fallback;
+    }
+    return Math.min(max, Math.max(min, num));
+}
+
+/**
  * Decide whether compaction should run now.
  * @param {object} args Gate inputs
  * @param {number} args.estTokens Estimated prompt tokens
@@ -160,6 +176,11 @@ export function shouldFire({ estTokens, thresholdTokens, lastFiredAtTokens, turn
 
     if (checkThreshold && threshold > 0 && est >= threshold) {
         const lastFired = Number(lastFiredAtTokens) || 0;
+        // Hysteresis: after firing, hold until the prompt either grows past
+        // the previous fire level or drains below the 0.9x threshold floor,
+        // so back-to-back generations hover near the line without refiring.
+        // Both sides are gate char-estimate units (unified in Phase 1), hence
+        // the est < lastFired guard: only suppress while still draining.
         const floor = Math.round(threshold * (1 - HYSTERESIS_RATIO));
         if (lastFired > 0 && est < lastFired && est < floor) {
             return { fire: false, reason: 'hysteresis' };

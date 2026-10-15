@@ -11,6 +11,7 @@ import { ARGUMENT_TYPE, SlashCommandArgument } from '../../slash-commands/SlashC
 import {
     TRIGGER_MODES,
     THRESHOLD_MODES,
+    clampInt,
     decideFire,
     estimateChatTokens,
     resolvePruneTarget,
@@ -19,7 +20,7 @@ import {
 } from './gate.js';
 import { applyCachedEvictions, planPrune } from './pruner.js';
 import { resolveFlags } from './flags.js';
-import { clearState, consumeForceArmed, readState, setTurnsSince, writeState } from './cache.js';
+import { clearState, consumeForceArmed, readState, revalidateState, setTurnsSince, writeState } from './cache.js';
 
 export const MODULE_NAME = 'context_compaction';
 
@@ -36,7 +37,7 @@ const defaultSettings = {
     cooldownN: 3,
     preserveN: 10,
     aggressiveness: 'balanced',
-    showBadge: true,
+    consoleLogging: true,
 };
 
 let statusText = '';
@@ -50,6 +51,13 @@ function getSettings() {
 
 function loadSettings() {
     const settings = getSettings();
+    // Legacy migration: showBadge was renamed to consoleLogging.
+    if (settings.consoleLogging === undefined && settings.showBadge !== undefined) {
+        settings.consoleLogging = settings.showBadge;
+    }
+    if (settings.showBadge !== undefined) {
+        delete settings.showBadge;
+    }
     for (const key of Object.keys(defaultSettings)) {
         if (settings[key] === undefined) {
             settings[key] = defaultSettings[key];
@@ -105,6 +113,11 @@ async function onPromptReady(eventData) {
             return;
         }
 
+        // Backstop for swipes/regens that bypass delete/edit events: a chat
+        // that shrank since the last compaction holds stale occurrence hashes.
+        const revalidated = revalidateState(context.chatMetadata, Array.isArray(context.chat) ? context.chat.length : 0);
+        // A dropped cache resets gate inputs too (stale lastFiredAtTokens would
+        // wrongly suppress the re-fire via hysteresis).
         const state = readState(context.chatMetadata);
         const estTokens = estimateChatTokens(eventData.chat);
         const thresholdTokens = resolveThreshold(settings, maxContext);
@@ -137,14 +150,17 @@ async function onPromptReady(eventData) {
         const decision = decideFire({ forced, ...gateArgs });
 
         if (!decision.fire) {
-            if (state.evictedHashes.length > 0) {
-                const filtered = applyCachedEvictions(eventData.chat, state.evictedHashes, state.stub);
+            const liveState = revalidated ? readState(context.chatMetadata) : state;
+            if (liveState.evictedHashes.length > 0) {
+                const filtered = applyCachedEvictions(eventData.chat, liveState.evictedHashes, liveState.stub);
                 eventData.chat.length = 0;
                 eventData.chat.push(...filtered);
             }
-            statusText = state.evictedHashes.length > 0
-                ? `Compacted earlier: ${state.evictedHashes.length} msgs pruned, ~${estTokens} est. tokens.`
-                : `No compaction: ~${estTokens} est. / ${thresholdTokens} tokens.`;
+            statusText = revalidated
+                ? 'Chat changed since last compaction: stale cache dropped, will re-plan on next trigger.'
+                : liveState.evictedHashes.length > 0
+                    ? `Compacted earlier: ${liveState.evictedHashes.length} msgs pruned, ~${estTokens} est. tokens.`
+                    : `No compaction: ~${estTokens} est. / ${thresholdTokens} tokens.`;
             renderStatus();
             return;
         }
@@ -185,7 +201,7 @@ async function onPromptReady(eventData) {
 
         statusText = `Compacted ${plan.evictedIndexes.length} msgs (~${plan.savedTokens} tokens) via ${decision.reason}.`;
         renderStatus();
-        if (settings.showBadge) {
+        if (settings.consoleLogging) {
             console.log(`[context-compaction] ${statusText} hashes: ${plan.evictedHashes.slice(0, 3).join(',')}${plan.evictedHashes.length > 3 ? '…' : ''}`);
         }
     } catch (error) {
@@ -211,8 +227,36 @@ function bumpTurnCounter() {
 }
 
 function onChatChanged() {
+    // Intentionally status-only: compaction state lives in per-chat
+    // chatMetadata, so switching chats inherently isolates caches —
+    // the previous chat's evictions travel with its own metadata.
     statusText = '';
     renderStatus();
+}
+
+/**
+ * Drop cached evictions after an in-place edit or delete. Occurrence
+ * numbering shifts under any mutation, so the whole cache goes (full
+ * clearState by design, never selective) and the next trigger replans.
+ */
+function onChatMutated() {
+    try {
+        const context = getContext();
+        if (!context?.chatMetadata) {
+            return;
+        }
+        const length = Array.isArray(context.chat) ? context.chat.length : 0;
+        if (revalidateState(context.chatMetadata, length, true)) {
+            statusText = 'Chat edited: stale compaction cache dropped.';
+            renderStatus();
+            console.debug('[context-compaction] cache dropped after chat mutation.');
+        }
+        if (typeof context.saveMetadataDebounced === 'function') {
+            context.saveMetadataDebounced();
+        }
+    } catch (error) {
+        console.debug('[context-compaction] mutation revalidation failed.', error);
+    }
 }
 
 /**
@@ -403,6 +447,16 @@ async function compactCallback(args) {
     return unknown;
 }
 
+/**
+ * Enable only the threshold input matching the active threshold mode, so the
+ * visible control always reflects the setting that resolveThreshold reads.
+ */
+function syncThresholdInputs() {
+    const isPercent = getSettings().thresholdMode !== THRESHOLD_MODES.ABSOLUTE;
+    $('#compaction_threshold_percent').prop('disabled', !isPercent);
+    $('#compaction_threshold_tokens').prop('disabled', isPercent);
+}
+
 function setupListeners() {
     $('#compaction_enabled').off('input').on('input', function () {
         getSettings().enabled = Boolean($(this).prop('checked'));
@@ -414,35 +468,46 @@ function setupListeners() {
     });
     $('#compaction_threshold_mode').off('change').on('change', function () {
         getSettings().thresholdMode = String($(this).val());
+        syncThresholdInputs();
         saveSettingsDebounced();
     });
     $('#compaction_threshold_tokens').off('input').on('input', function () {
-        getSettings().thresholdTokens = Number($(this).val());
+        const clamped = clampInt($(this).val(), 0, 1000000, defaultSettings.thresholdTokens);
+        $(this).val(clamped);
+        getSettings().thresholdTokens = clamped;
         saveSettingsDebounced();
     });
     $('#compaction_threshold_percent').off('input').on('input', function () {
-        getSettings().thresholdPercent = Number($(this).val());
-        $('#compaction_threshold_percent_value').text(`${getSettings().thresholdPercent}%`);
+        const clamped = clampInt($(this).val(), 10, 100, defaultSettings.thresholdPercent);
+        $(this).val(clamped);
+        getSettings().thresholdPercent = clamped;
+        $('#compaction_threshold_percent_value').text(`${clamped}%`);
         saveSettingsDebounced();
     });
     $('#compaction_every_n').off('input').on('input', function () {
-        getSettings().everyN = Number($(this).val());
+        const clamped = clampInt($(this).val(), 0, 500, defaultSettings.everyN);
+        $(this).val(clamped);
+        getSettings().everyN = clamped;
         saveSettingsDebounced();
     });
     $('#compaction_cooldown_n').off('input').on('input', function () {
-        getSettings().cooldownN = Number($(this).val());
+        const clamped = clampInt($(this).val(), 0, 100, defaultSettings.cooldownN);
+        $(this).val(clamped);
+        getSettings().cooldownN = clamped;
         saveSettingsDebounced();
     });
     $('#compaction_preserve_n').off('input').on('input', function () {
-        getSettings().preserveN = Number($(this).val());
+        const clamped = clampInt($(this).val(), 0, 200, defaultSettings.preserveN);
+        $(this).val(clamped);
+        getSettings().preserveN = clamped;
         saveSettingsDebounced();
     });
     $('#compaction_aggressiveness').off('change').on('change', function () {
         getSettings().aggressiveness = String($(this).val());
         saveSettingsDebounced();
     });
-    $('#compaction_show_badge').off('input').on('input', function () {
-        getSettings().showBadge = Boolean($(this).prop('checked'));
+    $('#compaction_console_logging').off('input').on('input', function () {
+        getSettings().consoleLogging = Boolean($(this).prop('checked'));
         saveSettingsDebounced();
     });
     $('#compaction_force').off('click').on('click', () => forceCompact());
@@ -461,7 +526,8 @@ function syncSettingsUI() {
     $('#compaction_cooldown_n').val(Number(settings.cooldownN));
     $('#compaction_preserve_n').val(Number(settings.preserveN));
     $('#compaction_aggressiveness').val(String(settings.aggressiveness));
-    $('#compaction_show_badge').prop('checked', Boolean(settings.showBadge));
+    $('#compaction_console_logging').prop('checked', Boolean(settings.consoleLogging));
+    syncThresholdInputs();
 }
 
 export async function init() {
@@ -478,6 +544,8 @@ export async function init() {
 
     eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, onPromptReady);
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
+    eventSource.on(event_types.MESSAGE_DELETED, onChatMutated);
+    eventSource.on(event_types.MESSAGE_EDITED, onChatMutated);
     // One bump per NPC reply = one full player->NPC cycle per turn.
     eventSource.on(event_types.MESSAGE_RECEIVED, bumpTurnCounter);
 

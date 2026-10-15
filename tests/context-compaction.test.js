@@ -1,6 +1,7 @@
 import { describe, test, expect } from '@jest/globals';
 import {
     TRIGGER_MODES,
+    clampInt,
     decideFire,
     estimateChatTokens,
     resolvePruneTarget,
@@ -10,7 +11,7 @@ import {
 import { applyCachedEvictions, planPrune } from '../public/scripts/extensions/context-compaction/pruner.js';
 import { hashChatMessages, hashMessage, scoreMessage } from '../public/scripts/extensions/context-compaction/scorer.js';
 import { resolveFlags } from '../public/scripts/extensions/context-compaction/flags.js';
-import { clearState, consumeForceArmed, readState, setTurnsSince, writeState } from '../public/scripts/extensions/context-compaction/cache.js';
+import { METADATA_KEY, clearState, consumeForceArmed, readState, revalidateState, setTurnsSince, touchChatLength, writeState } from '../public/scripts/extensions/context-compaction/cache.js';
 
 describe('compaction gate', () => {
     test('fires on token threshold', () => {
@@ -120,6 +121,44 @@ describe('compaction cache', () => {
         clearState(metadata);
         expect(readState(metadata).evictedHashes).toEqual([]);
     });
+
+    test('shorter chat drops cached evictions', () => {
+        const metadata = {};
+        writeState(metadata, { evictedHashes: ['h1', 'h2'], stub: 'stub', lastFiredAtTokens: 10, turnsSinceCompaction: 0, tokenSaved: 5, lastChatLength: 8 });
+        expect(revalidateState(metadata, 6)).toBe(true);
+        expect(readState(metadata).evictedHashes).toEqual([]);
+    });
+
+    test('edit at the same length drops cached evictions when forced', () => {
+        const metadata = {};
+        writeState(metadata, { evictedHashes: ['h1'], stub: 'stub', lastFiredAtTokens: 10, turnsSinceCompaction: 0, tokenSaved: 5, lastChatLength: 8 });
+        expect(revalidateState(metadata, 8, true)).toBe(true);
+        expect(readState(metadata).evictedHashes).toEqual([]);
+    });
+
+    test('unchanged chat keeps the cache and refreshes the length marker', () => {
+        const metadata = {};
+        writeState(metadata, { evictedHashes: ['h1'], stub: 'stub', lastFiredAtTokens: 10, turnsSinceCompaction: 0, tokenSaved: 5, lastChatLength: 8 });
+        expect(revalidateState(metadata, 9)).toBe(false);
+        const state = readState(metadata);
+        expect(state.evictedHashes).toEqual(['h1']);
+        expect(state.lastChatLength).toBe(9);
+    });
+
+    test('empty cache never creates metadata', () => {
+        const metadata = {};
+        expect(revalidateState(metadata, 5)).toBe(false);
+        expect(METADATA_KEY in metadata).toBe(false);
+    });
+
+    test('touchChatLength round-trips and skips no-op writes', () => {
+        const metadata = {};
+        writeState(metadata, { evictedHashes: [], stub: '', lastFiredAtTokens: 0, turnsSinceCompaction: 0, tokenSaved: 0, lastChatLength: 4 });
+        touchChatLength(metadata, 4);
+        expect(readState(metadata).lastChatLength).toBe(4);
+        touchChatLength(metadata, 7);
+        expect(readState(metadata).lastChatLength).toBe(7);
+    });
 });
 
 describe('token-unit unification', () => {
@@ -178,6 +217,16 @@ describe('token-unit unification', () => {
     test('resolvePruneTarget falls back to plain threshold without usable inputs', () => {
         expect(resolvePruneTarget({ estTokens: 0, accurateTotal: 100, thresholdTokens: 1000 })).toBe(950);
         expect(resolvePruneTarget({ estTokens: 1000, accurateTotal: 0, thresholdTokens: 1000 })).toBe(950);
+    });
+
+    test('clampInt clamps settings ranges and falls back on garbage', () => {
+        expect(clampInt(-5, 0, 500, 10)).toBe(0);
+        expect(clampInt(999, 0, 500, 10)).toBe(500);
+        expect(clampInt(42, 0, 500, 10)).toBe(42);
+        expect(clampInt('abc', 0, 500, 10)).toBe(10);
+        expect(clampInt('', 10, 100, 80)).toBe(10);
+        expect(clampInt(5, 10, 100, 80)).toBe(10);
+        expect(clampInt(150, 10, 100, 80)).toBe(100);
     });
 });
 

@@ -107,9 +107,7 @@ export function applyCachedEvictions(chat, evictedHashes, stub) {
     const evicted = new Set(evictedHashes);
     const hashes = hashChatMessages(messages);
     const kept = [];
-    let stubInserted = false;
     let firstEvictedIndex = -1;
-    const remaining = [];
 
     for (let index = 0; index < messages.length; index++) {
         if (evicted.has(hashes[index])) {
@@ -118,19 +116,15 @@ export function applyCachedEvictions(chat, evictedHashes, stub) {
             }
             continue;
         }
-        remaining.push({ message: messages[index], keptIndex: kept.length });
         kept.push(messages[index]);
     }
 
-    if (remaining.length === messages.length || !stub) {
+    if (firstEvictedIndex === -1 || !stub) {
         return kept;
     }
 
-    if (!stubInserted) {
-        stubInserted = true;
-        const insertAt = Math.max(0, firstEvictedIndex === -1 ? 1 : firstEvictedIndex);
-        kept.splice(insertAt, 0, { role: 'system', content: String(stub) });
-    }
+    const insertAt = Math.max(0, firstEvictedIndex);
+    kept.splice(insertAt, 0, { role: 'system', content: String(stub) });
 
     return kept;
 }
