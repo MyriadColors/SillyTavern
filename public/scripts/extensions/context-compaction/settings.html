@@ -1,0 +1,57 @@
+<div id="compaction_settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>Context Compaction</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <label class="checkbox_label" for="compaction_enabled">
+                <input id="compaction_enabled" type="checkbox" />
+                <span>Enable smart pruning (chat completion only)</span>
+            </label>
+            <label for="compaction_trigger_mode">Trigger</label>
+            <select id="compaction_trigger_mode" class="text_pole">
+                <option value="either">Token threshold OR every N turns</option>
+                <option value="threshold">Token threshold only</option>
+                <option value="every_n">Every N turns only</option>
+            </select>
+            <label for="compaction_threshold_mode">Threshold type</label>
+            <select id="compaction_threshold_mode" class="text_pole">
+                <option value="percent">Percent of max context</option>
+                <option value="absolute">Absolute tokens</option>
+            </select>
+            <label for="compaction_threshold_percent">Threshold (<span id="compaction_threshold_percent_value">80%</span>)</label>
+            <input id="compaction_threshold_percent" class="text_pole" type="number" min="10" max="100" step="1" />
+            <label for="compaction_threshold_tokens">Absolute threshold (tokens)</label>
+            <input id="compaction_threshold_tokens" class="text_pole" type="number" min="500" max="1000000" step="100" />
+            <label for="compaction_every_n">Compact every N turns (0 = disabled)</label>
+            <input id="compaction_every_n" class="text_pole" type="number" min="0" max="500" step="1" />
+            <label for="compaction_cooldown_n">Cooldown between compactions (turns)</label>
+            <input id="compaction_cooldown_n" class="text_pole" type="number" min="0" max="100" step="1" />
+            <label for="compaction_preserve_n">Always keep last N messages</label>
+            <input id="compaction_preserve_n" class="text_pole" type="number" min="2" max="200" step="1" />
+            <label for="compaction_aggressiveness">Aggressiveness</label>
+            <select id="compaction_aggressiveness" class="text_pole">
+                <option value="conservative">Conservative</option>
+                <option value="balanced">Balanced</option>
+                <option value="aggressive">Aggressive</option>
+            </select>
+            <label class="checkbox_label" for="compaction_show_badge">
+                <input id="compaction_show_badge" type="checkbox" />
+                <span>Log compaction activity to console</span>
+            </label>
+            <div class="flex-container flexGap5">
+                <div id="compaction_force" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-compress"></i>
+                    <span>Compact next</span>
+                </div>
+                <div id="compaction_clear" class="menu_button menu_button_icon">
+                    <i class="fa-solid fa-trash"></i>
+                    <span>Clear cache</span>
+                </div>
+            </div>
+            <small id="compaction_status" class="compaction_status"></small>
+            <small>Smart pruning runs only when the gate fires. Use <code>/ctx-compact status|force|clear</code> for manual control.</small>
+        </div>
+    </div>
+</div>
