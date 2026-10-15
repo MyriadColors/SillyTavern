@@ -439,11 +439,37 @@
                             <input type="radio" name="vectors_position" value="0" />
                             <span data-i18n="After Main Prompt / Story String">After Main Prompt / Story String</span>
                         </label>
-                        <label for="vectors_depth" title="How many messages before the current end of the chat." data-i18n="[title]How many messages before the current end of the chat.">
+                        <!-- Translators: the title text below intentionally extends the i18n key with a cache warning. Please update this key's value (not the key) in your language file. -->
+                        <label for="vectors_depth" title="How many messages before the current end of the chat. WARNING: In-chat placement shifts the chat history every turn and breaks backend prompt caching (prefix cache). Prefer Before/After Main Prompt for cache-friendly retrieval." data-i18n="[title]How many messages before the current end of the chat.">
                             <input type="radio" name="vectors_position" value="1" />
-                            <span data-i18n="In-chat @ Depth">In-chat @ Depth </span>
+                            <span data-i18n="In-chat @ Depth">In-chat @ Depth (breaks prompt cache)</span>
                             <input id="vectors_depth" class="text_pole widthUnset" type="number" min="0" max="9999" />
                         </label>
+                    </div>
+                    <label for="vectors_order" data-i18n="Retrieved Order">Retrieved Order</label>
+                    <div class="radio_group">
+                        <label title="Chronological order keeps the injected block stable between turns (cache-friendly).">
+                            <input type="radio" name="vectors_order" value="chronological" />
+                            <span data-i18n="Chronological (cache-friendly)">Chronological (cache-friendly)</span>
+                        </label>
+                        <label title="Relevance order may reshuffle the injected block every turn and break backend prompt caching.">
+                            <input type="radio" name="vectors_order" value="relevance" />
+                            <span data-i18n="By relevance (breaks prompt cache)">By relevance (breaks prompt cache)</span>
+                        </label>
+                    </div>
+                    <div class="flex-container">
+                        <div class="flex1" title="Freeze retrieved memories and file blocks across turns for prompt-cache stability. Refreshes every N turns or when retrieval changes. 0 = disabled (always fresh).">
+                            <label for="vectors_pin_interval">
+                                <small data-i18n="Pin interval (turns, 0 = off)">Pin interval (turns, 0 = off)</small>
+                            </label>
+                            <input id="vectors_pin_interval" type="number" class="text_pole widthUnset" min="0" max="9999" />
+                        </div>
+                        <div class="flex1" title="Minimum overlap between fresh and pinned retrieval to keep the pinned block (0-1). Lower refreshes more often.">
+                            <label for="vectors_pin_overlap">
+                                <small data-i18n="Pin overlap (0-1)">Pin overlap (0-1)</small>
+                            </label>
+                            <input id="vectors_pin_overlap" type="number" class="text_pole widthUnset" min="0" max="1" step="0.05" />
+                        </div>
                     </div>
                     <div class="flex-container">
                         <div class="flex1" title="Can increase the retrieval quality for the cost of processing. 0 = disabled.">

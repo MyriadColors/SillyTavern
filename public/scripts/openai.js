@@ -1283,6 +1283,16 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
         }
     };
 
+    // Cache-aware retrieval contract: these relative extension prompts are merged
+    // into the system prefix (injectToMain) ahead of chat history, keeping the
+    // shared prefix stable for backend prompt caching (OpenAI automatic prefix
+    // caching, Claude prompt caching breakpoints, llama.cpp cache_prompt).
+    // Do NOT move vectorsMemory/vectorsDataBank/smartContext below chatHistory
+    // or into IN_CHAT depth injection without a cache-impact review.
+    // Limitation: block content still changes per turn (best-effort); only its
+    // position and serialization order are stabilized (see vectors extension).
+    // TODO: align server Claude caching breakpoints (cachingAtDepthForClaude)
+    // to sit after this static block so the whole prefix is cacheable.
     const knownPrompts = [
         'summary',
         'authorsNote',

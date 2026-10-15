@@ -39,6 +39,7 @@ import { generateWebLlmChatPrompt, isWebLlmSupported } from '../shared.js';
 import { WebLlmVectorProvider } from './webllm.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { oai_settings } from '../../openai.js';
+import { mergeFileBlocksIntoDbPrompt, shouldReusePinnedBlock, sortQueriedMessagesByRelevance, sortQueriedMessagesChronologically } from './cache-utils.js';
 
 /**
  * @typedef {object} HashedMessage
@@ -89,11 +90,20 @@ const settings = {
     template: 'Past events:\n{{text}}',
     depth: 2,
     position: extension_prompt_types.IN_PROMPT,
+    // Order of retrieved chat memories: 'chronological' keeps the emitted
+    // block stable under score jitter (cache-friendly default); 'relevance'
+    // orders by vector rank at the cost of prefix-cache churn.
+    order: 'chronological',
     protect: 5,
     insert: 3,
     query: 2,
     message_chunk_size: 400,
     score_threshold: 0.25,
+    // Pin / refresh: freeze retrieved blocks across turns for prompt-cache
+    // stability. pin_interval 0 disables pinning (always fresh retrieval).
+    // Applies to both chat memories and in-chat file blocks.
+    pin_interval: 0,
+    pin_overlap: 0.5,
 
     // For files
     enabled_files: false,
@@ -118,6 +128,17 @@ const settings = {
     enabled_world_info: false,
     enabled_for_all: false,
     max_entries: 5,
+};
+
+/**
+ * Pinned (frozen) retrieval blocks for cache stability. Each entry holds
+ * `{ chatId, text, keys, turnsSinceRefresh }`; keyed by chat so switching
+ * chats starts fresh instead of reusing a stale block.
+ * See `shouldReusePinnedBlock` in cache-utils.js for the reuse decision.
+ */
+const pinnedBlocks = {
+    chat: null,
+    files: null,
 };
 
 const moduleWorker = new ModuleWorkerWrapper(synchronizeChat);
@@ -593,27 +614,46 @@ async function processFiles(chat) {
             await injectDataBankChunks(queryText, dataBankCollectionIds);
         }
 
+        // Cache-aware retrieval: in-chat file chunks are collected into the static
+        // Data Bank extension-prompt zone instead of being prepended into
+        // `message.mes` in place. Mutating history content invalidates the
+        // shared prompt prefix on every turn (worst case for prompt caching).
+        // Limitation: per-message attribution is lost; chunks from all messages
+        // share one prefix-stable block ordered by vector index (see
+        // retrieveFileChunks, already index-sorted). Query text is still
+        // per-turn (best-effort stability).
+        // TODO: introduce a dedicated EXTENSION_PROMPT_TAG for in-chat files
+        // (instead of merging into the Data Bank slot) with its own
+        // template/position/depth/role settings, once migration of existing
+        // user data is handled.
+        const inChatFileBlocks = [];
+        const fileQueryText = await getQueryText(chat, 'file');
+
         for (const message of chat) {
             // Message has no files
             if (!Array.isArray(message?.extra?.files) || !message.extra.files.length) {
                 continue;
             }
 
-            // Trim file inserted by the script
-            const allFileText = String(message.mes || '').substring(0, message.extra.fileLength).trim();
+            // Strip text injected by older versions of this extension that
+            // mutated message.mes in place. Kept for one-way migration; new
+            // code never writes into message.mes. If fileLength is 0/undefined
+            // this is a no-op.
+            if (message.extra.fileLength) {
+                message.mes = String(message.mes || '').substring(message.extra.fileLength);
+            }
 
             // Convert kilobytes to string length
             const thresholdLength = settings.size_threshold * 1024;
 
-            // File is too small
-            if (allFileText.length < thresholdLength) {
+            // File is too small. Measures the stored attachment text rather than
+            // the (possibly stripped) message content. Note: this differs
+            // slightly from the legacy check (injected-prefix slice of mes),
+            // so files near size_threshold may flip over/under the cutoff.
+            const attachmentText = (message.extra.files.map(file => file.text).filter(Boolean).join('\n') || '').trim();
+            if (attachmentText.length < thresholdLength) {
                 continue;
             }
-
-            message.mes = message.mes.substring(message.extra.fileLength);
-
-            const allFileChunks = [];
-            const queryText = await getQueryText(chat, 'file');
 
             for (const file of message.extra.files) {
                 const fileName = file.name;
@@ -630,13 +670,51 @@ async function processFiles(chat) {
                     await vectorizeFile(fileText, fileName, collectionId, settings.chunk_size, settings.overlap_percent);
                 }
 
-                const fileChunks = await retrieveFileChunks(queryText, collectionId);
+                const fileChunks = await retrieveFileChunks(fileQueryText, collectionId);
                 if (fileChunks) {
-                    allFileChunks.push(fileChunks);
+                    inChatFileBlocks.push(fileChunks);
                 }
             }
+        }
 
-            message.mes = `${allFileChunks.join('\n\n')}\n\n${message.mes}`;
+        if (inChatFileBlocks.length) {
+            const previousDbPrompt = getContext()?.extensionPrompts?.[EXTENSION_PROMPT_TAG_DB]?.value || '';
+            // Safe from double-append: rearrangeChat clears prompts at entry and
+            // is the sole processFiles caller (single call per generation via
+            // the generate_interceptor hook), so this read-modify-write starts
+            // fresh each run. previousDbPrompt is only non-empty when the Data
+            // Bank path above ran earlier in this same call.
+            // Pin / refresh (same mechanism as chat memories): only the raw
+            // file-block text is frozen; it is re-merged with the fresh
+            // previousDbPrompt each turn so Data Bank chunks stay current.
+            const fileChatId = getCurrentChatId();
+            const uniqueFileBlocks = [...new Set(inChatFileBlocks.filter(Boolean))];
+            const filesPin = pinnedBlocks.files?.chatId === fileChatId ? pinnedBlocks.files : null;
+            const filesPinDecision = shouldReusePinnedBlock({
+                pinnedKeys: filesPin?.keys ?? [],
+                freshKeys: uniqueFileBlocks,
+                turnsSinceRefresh: filesPin?.turnsSinceRefresh ?? 0,
+                interval: settings.pin_interval,
+                overlapThreshold: settings.pin_overlap,
+            });
+            let fileBlockText;
+            if (filesPinDecision.reuse && filesPin) {
+                console.debug(`Vectors: Reusing pinned file blocks (overlap ${filesPinDecision.overlap.toFixed(2)}, turn ${filesPin.turnsSinceRefresh + 1}/${settings.pin_interval})`);
+                filesPin.turnsSinceRefresh++;
+                fileBlockText = filesPin.text;
+            } else {
+                fileBlockText = uniqueFileBlocks.join('\n\n');
+                pinnedBlocks.files = { chatId: fileChatId, text: fileBlockText, keys: uniqueFileBlocks, turnsSinceRefresh: 0 };
+            }
+            const mergedText = mergeFileBlocksIntoDbPrompt({
+                previousDbPrompt,
+                fileBlocks: [fileBlockText],
+                formatBlock: (text) => substituteParamsExtended(settings.file_template_db, { text }),
+                onFallback: (message) => console.warn(`Vectors: ${message}`),
+            });
+            // Reuse the Data Bank static zone (IN_PROMPT by default) so file
+            // context stays in the system prefix, ahead of chat history.
+            setExtensionPrompt(EXTENSION_PROMPT_TAG_DB, mergedText, settings.file_position_db, settings.file_depth_db, settings.include_wi, settings.file_depth_role_db);
         }
     } catch (error) {
         console.error('Vectors: Failed to retrieve files', error);
@@ -828,6 +906,7 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
         const queryHashes = queryResults.hashes.filter(onlyUnique);
         const queriedMessages = [];
         const insertedHashes = new Set();
+        const freshKeys = [];
         const retainMessages = chat.slice(-settings.protect);
 
         for (const message of chat) {
@@ -838,18 +917,41 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
             if (queryHashes.includes(hash) && !insertedHashes.has(hash)) {
                 queriedMessages.push(message);
                 insertedHashes.add(hash);
+                freshKeys.push(hash);
             }
         }
 
-        // Rearrange queried messages to match query order
-        // Order is reversed because more relevant are at the lower indices
-        queriedMessages.sort((a, b) => queryHashes.indexOf(getStringHash(substituteParams(b.mes))) - queryHashes.indexOf(getStringHash(substituteParams(a.mes))));
+        // Pin / refresh: reuse the frozen block while retrieval is stable so
+        // injected memories stay byte-identical across turns (cache hits).
+        // The embedding query still runs every turn to measure overlap; when
+        // the pin drops, the block is recomputed and re-pinned below.
+        const chatPin = pinnedBlocks.chat?.chatId === chatId ? pinnedBlocks.chat : null;
+        const chatPinDecision = shouldReusePinnedBlock({
+            pinnedKeys: chatPin?.keys ?? [],
+            freshKeys,
+            turnsSinceRefresh: chatPin?.turnsSinceRefresh ?? 0,
+            interval: settings.pin_interval,
+            overlapThreshold: settings.pin_overlap,
+        });
+        if (chatPinDecision.reuse && chatPin) {
+            console.debug(`Vectors: Reusing pinned chat memories (overlap ${chatPinDecision.overlap.toFixed(2)}, turn ${chatPin.turnsSinceRefresh + 1}/${settings.pin_interval})`);
+            chatPin.turnsSinceRefresh++;
+            setExtensionPrompt(EXTENSION_PROMPT_TAG, chatPin.text, settings.position, settings.depth, settings.include_wi);
+            return;
+        }
 
-        // Remove queried messages from the original chat array
-        for (const message of chat) {
-            if (queriedMessages.includes(message)) {
-                chat.splice(chat.indexOf(message), 1);
-            }
+        // Cache-aware retrieval: chronological (chat) order is stable under small
+        // relevance-score jitter, keeping the emitted system-prefix block
+        // deterministic. Relevance ordering is opt-in via settings.order.
+        // See cache-utils.js for limitations and TODOs.
+        // NOTE: do NOT remove queried messages from `chat`. Keeping base history
+        // intact preserves the shared prefix; duplication between history and
+        // the injected block costs a few tokens but restores cache hits.
+        if (settings.order === 'relevance') {
+            const rankOf = (message) => queryHashes.indexOf(getStringHash(substituteParams(message.mes)));
+            sortQueriedMessagesByRelevance(queriedMessages, chat, rankOf);
+        } else {
+            sortQueriedMessagesChronologically(queriedMessages, chat);
         }
 
         if (queriedMessages.length === 0) {
@@ -859,6 +961,7 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
 
         // Format queried messages into a single string
         const insertedText = getPromptText(queriedMessages);
+        pinnedBlocks.chat = { chatId, text: insertedText, keys: freshKeys, turnsSinceRefresh: 0 };
         setExtensionPrompt(EXTENSION_PROMPT_TAG, insertedText, settings.position, settings.depth, settings.include_wi);
     } catch (error) {
         toastr.error('Generation interceptor aborted. Check browser console for more details.', 'Vector Storage');
@@ -1881,6 +1984,33 @@ export async function init() {
     $(`input[name="vectors_position"][value="${settings.position}"]`).prop('checked', true);
     $('input[name="vectors_position"]').on('change', () => {
         settings.position = Number($('input[name="vectors_position"]:checked').val());
+        Object.assign(extension_settings.vectors, settings);
+        saveSettingsDebounced();
+    });
+    // Migrate users from before the order setting existed
+    if (settings.order !== 'relevance') {
+        settings.order = 'chronological';
+    }
+    $(`input[name="vectors_order"][value="${settings.order}"]`).prop('checked', true);
+    $('input[name="vectors_order"]').on('change', () => {
+        settings.order = String($('input[name="vectors_order"]:checked').val());
+        Object.assign(extension_settings.vectors, settings);
+        saveSettingsDebounced();
+    });
+    // Migrate users from before the pin settings existed (default: disabled)
+    if (!Number.isFinite(Number(settings.pin_interval))) {
+        settings.pin_interval = 0;
+    }
+    if (!Number.isFinite(Number(settings.pin_overlap))) {
+        settings.pin_overlap = 0.5;
+    }
+    $('#vectors_pin_interval').val(settings.pin_interval).on('input', () => {
+        settings.pin_interval = Number($('#vectors_pin_interval').val());
+        Object.assign(extension_settings.vectors, settings);
+        saveSettingsDebounced();
+    });
+    $('#vectors_pin_overlap').val(settings.pin_overlap).on('input', () => {
+        settings.pin_overlap = Number($('#vectors_pin_overlap').val());
         Object.assign(extension_settings.vectors, settings);
         saveSettingsDebounced();
     });
