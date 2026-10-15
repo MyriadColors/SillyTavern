@@ -107,29 +107,98 @@ export async function clearItemizedPrompts() {
 }
 
 export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMesId) {
+    const promptSet = itemizedPrompts[thisPromptSet];
+
+    // Fast-path: return cached params if available
+    if (promptSet.cachedParams) {
+        return promptSet.cachedParams;
+    }
+
+    if (!promptSet.cachedTokens) {
+        promptSet.cachedTokens = {};
+    }
+
+    const getTokenCountCached = async (key, text) => {
+        if (typeof promptSet.cachedTokens[key] === 'number') {
+            return promptSet.cachedTokens[key];
+        }
+        const count = await getTokenCountAsync(text);
+        promptSet.cachedTokens[key] = count;
+        return count;
+    };
+
+    const isOai = promptSet.main_api === 'openai';
+
+    // Collect all auxiliary async token counts in parallel
+    const [
+        charDescriptionTokens,
+        charPersonalityTokens,
+        scenarioTextTokens,
+        userPersonaStringTokens,
+        worldInfoStringTokens,
+        allAnchorsTokens,
+        summarizeStringTokens,
+        authorsNoteStringTokens,
+        smartContextStringTokens,
+        beforeScenarioAnchorTokens,
+        afterScenarioAnchorTokens,
+        zeroDepthAnchorTokens,
+        chatInjects,
+        chatVectorsStringTokens,
+        dataBankVectorsStringTokens,
+        finalPromptTokens,
+        storyStringTokensRaw,
+        examplesStringTokens,
+        mesSendStringTokens,
+        instructionTokens,
+        promptBiasTokens,
+    ] = await Promise.all([
+        getTokenCountCached('charDescription', promptSet.charDescription),
+        getTokenCountCached('charPersonality', promptSet.charPersonality),
+        getTokenCountCached('scenarioText', promptSet.scenarioText),
+        getTokenCountCached('userPersona', promptSet.userPersona),
+        getTokenCountCached('worldInfoString', promptSet.worldInfoString),
+        getTokenCountCached('allAnchors', promptSet.allAnchors),
+        getTokenCountCached('summarizeString', promptSet.summarizeString),
+        getTokenCountCached('authorsNoteString', promptSet.authorsNoteString),
+        getTokenCountCached('smartContextString', promptSet.smartContextString),
+        getTokenCountCached('beforeScenarioAnchor', promptSet.beforeScenarioAnchor),
+        getTokenCountCached('afterScenarioAnchor', promptSet.afterScenarioAnchor),
+        getTokenCountCached('zeroDepthAnchor', promptSet.zeroDepthAnchor),
+        getTokenCountCached('chatInjects', promptSet.chatInjects),
+        getTokenCountCached('chatVectorsString', promptSet.chatVectorsString),
+        getTokenCountCached('dataBankVectorsString', promptSet.dataBankVectorsString),
+        !isOai ? getTokenCountCached('finalPrompt', promptSet.finalPrompt) : Promise.resolve(0),
+        !isOai ? getTokenCountCached('storyString', promptSet.storyString) : Promise.resolve(0),
+        !isOai ? getTokenCountCached('examplesString', promptSet.examplesString) : Promise.resolve(0),
+        !isOai ? getTokenCountCached('mesSendString', promptSet.mesSendString) : Promise.resolve(0),
+        !isOai ? getTokenCountCached('instruction', promptSet.instruction) : Promise.resolve(0),
+        !isOai ? getTokenCountCached('promptBias', promptSet.promptBias) : Promise.resolve(0),
+    ]);
+
     const params = {
-        charDescriptionTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].charDescription),
-        charPersonalityTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].charPersonality),
-        scenarioTextTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].scenarioText),
-        userPersonaStringTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].userPersona),
-        worldInfoStringTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].worldInfoString),
-        allAnchorsTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].allAnchors),
-        summarizeStringTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].summarizeString),
-        authorsNoteStringTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].authorsNoteString),
-        smartContextStringTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].smartContextString),
-        beforeScenarioAnchorTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].beforeScenarioAnchor),
-        afterScenarioAnchorTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].afterScenarioAnchor),
-        zeroDepthAnchorTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].zeroDepthAnchor), // TODO: unused
-        thisPrompt_padding: itemizedPrompts[thisPromptSet].padding,
-        this_main_api: itemizedPrompts[thisPromptSet].main_api,
-        chatInjects: await getTokenCountAsync(itemizedPrompts[thisPromptSet].chatInjects),
-        chatVectorsStringTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].chatVectorsString),
-        dataBankVectorsStringTokens: await getTokenCountAsync(itemizedPrompts[thisPromptSet].dataBankVectorsString),
+        charDescriptionTokens,
+        charPersonalityTokens,
+        scenarioTextTokens,
+        userPersonaStringTokens,
+        worldInfoStringTokens,
+        allAnchorsTokens,
+        summarizeStringTokens,
+        authorsNoteStringTokens,
+        smartContextStringTokens,
+        beforeScenarioAnchorTokens,
+        afterScenarioAnchorTokens,
+        zeroDepthAnchorTokens, // TODO: unused
+        thisPrompt_padding: promptSet.padding,
+        this_main_api: promptSet.main_api,
+        chatInjects,
+        chatVectorsStringTokens,
+        dataBankVectorsStringTokens,
         modelUsed: chat[incomingMesId]?.extra?.model,
         apiUsed: chat[incomingMesId]?.extra?.api,
-        presetName: itemizedPrompts[thisPromptSet].presetName || t`(Unknown)`,
-        messagesCount: String(itemizedPrompts[thisPromptSet].messagesCount ?? ''),
-        examplesCount: String(itemizedPrompts[thisPromptSet].examplesCount ?? ''),
+        presetName: promptSet.presetName || t`(Unknown)`,
+        messagesCount: String(promptSet.messagesCount ?? ''),
+        examplesCount: String(promptSet.examplesCount ?? ''),
     };
 
     const getFriendlyName = (value) => $(`#rm_api_block select option[value="${value}"]`).first().text() || value;
@@ -150,17 +219,17 @@ export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMes
         //for OAI API
         //console.log('-- Counting OAI Tokens');
 
-        //params.finalPromptTokens = itemizedPrompts[thisPromptSet].oaiTotalTokens;
-        params.oaiMainTokens = itemizedPrompts[thisPromptSet].oaiMainTokens;
-        params.oaiStartTokens = itemizedPrompts[thisPromptSet].oaiStartTokens;
-        params.ActualChatHistoryTokens = itemizedPrompts[thisPromptSet].oaiConversationTokens;
-        params.examplesStringTokens = itemizedPrompts[thisPromptSet].oaiExamplesTokens;
-        params.oaiPromptTokens = itemizedPrompts[thisPromptSet].oaiPromptTokens - (params.afterScenarioAnchorTokens + params.beforeScenarioAnchorTokens) + params.examplesStringTokens;
-        params.oaiBiasTokens = itemizedPrompts[thisPromptSet].oaiBiasTokens;
-        params.oaiJailbreakTokens = itemizedPrompts[thisPromptSet].oaiJailbreakTokens;
-        params.oaiNudgeTokens = itemizedPrompts[thisPromptSet].oaiNudgeTokens;
-        params.oaiImpersonateTokens = itemizedPrompts[thisPromptSet].oaiImpersonateTokens;
-        params.oaiNsfwTokens = itemizedPrompts[thisPromptSet].oaiNsfwTokens;
+        //params.finalPromptTokens = promptSet.oaiTotalTokens;
+        params.oaiMainTokens = promptSet.oaiMainTokens;
+        params.oaiStartTokens = promptSet.oaiStartTokens;
+        params.ActualChatHistoryTokens = promptSet.oaiConversationTokens;
+        params.examplesStringTokens = promptSet.oaiExamplesTokens;
+        params.oaiPromptTokens = promptSet.oaiPromptTokens - (params.afterScenarioAnchorTokens + params.beforeScenarioAnchorTokens) + params.examplesStringTokens;
+        params.oaiBiasTokens = promptSet.oaiBiasTokens;
+        params.oaiJailbreakTokens = promptSet.oaiJailbreakTokens;
+        params.oaiNudgeTokens = promptSet.oaiNudgeTokens;
+        params.oaiImpersonateTokens = promptSet.oaiImpersonateTokens;
+        params.oaiNsfwTokens = promptSet.oaiNsfwTokens;
         params.finalPromptTokens =
             params.oaiStartTokens +
             params.oaiPromptTokens +
@@ -193,13 +262,13 @@ export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMes
     } else {
         //for non-OAI APIs
         //console.log('-- Counting non-OAI Tokens');
-        params.finalPromptTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].finalPrompt);
-        params.storyStringTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].storyString) - params.worldInfoStringTokens;
-        params.examplesStringTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].examplesString);
-        params.mesSendStringTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].mesSendString);
+        params.finalPromptTokens = finalPromptTokens;
+        params.storyStringTokens = storyStringTokensRaw - params.worldInfoStringTokens;
+        params.examplesStringTokens = examplesStringTokens;
+        params.mesSendStringTokens = mesSendStringTokens;
         params.ActualChatHistoryTokens = params.mesSendStringTokens - (params.allAnchorsTokens - (params.beforeScenarioAnchorTokens + params.afterScenarioAnchorTokens)) + power_user.token_padding;
-        params.instructionTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].instruction);
-        params.promptBiasTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].promptBias);
+        params.instructionTokens = instructionTokens;
+        params.promptBiasTokens = promptBiasTokens;
 
         params.totalTokensInPrompt =
             params.storyStringTokens +     //chardefs total
@@ -211,7 +280,7 @@ export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMes
             //zeroDepthAnchorTokens +           //same as above, even if AN not on 0 depth
             params.promptBiasTokens;       //{{}}
         //- thisPrompt_padding;  //not sure this way of calculating is correct, but the math results in same value as 'finalPrompt'
-        params.thisPrompt_max_context = itemizedPrompts[thisPromptSet].this_max_context;
+        params.thisPrompt_max_context = promptSet.this_max_context;
         params.thisPrompt_actual = params.thisPrompt_max_context - params.thisPrompt_padding;
 
         //console.log('-- applying % on non-OAI tokens');
@@ -220,8 +289,11 @@ export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMes
         params.promptBiasTokensPercentage = ((params.promptBiasTokens / (params.totalTokensInPrompt)) * 100).toFixed(2);
         params.worldInfoStringTokensPercentage = ((params.worldInfoStringTokens / (params.totalTokensInPrompt)) * 100).toFixed(2);
         params.allAnchorsTokensPercentage = ((params.allAnchorsTokens / (params.totalTokensInPrompt)) * 100).toFixed(2);
-        params.selectedTokenizer = itemizedPrompts[thisPromptSet]?.tokenizer || getFriendlyTokenizerName(params.this_main_api).tokenizerName;
+        params.selectedTokenizer = promptSet?.tokenizer || getFriendlyTokenizerName(params.this_main_api).tokenizerName;
     }
+
+    // Cache computed params on promptSet for zero-delay repeat opens
+    promptSet.cachedParams = params;
     return params;
 }
 

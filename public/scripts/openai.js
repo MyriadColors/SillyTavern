@@ -2760,7 +2760,14 @@ export async function createGenerationParameters(settings, model, type, messages
             }
 
             const content = message.content.filter(block => block?.type !== 'image_url');
-            return content.length > 0 ? [{ ...message, content }] : [];
+            if (content.length === 0) {
+                return [];
+            }
+
+            return /** @type {ChatCompletionMessage[]} */(/** @type {unknown} */([{
+                ...message,
+                content,
+            }]));
         });
     }
 
@@ -3988,22 +3995,23 @@ export class ChatCompletion {
         this.messages.collection = this.messages.flatten();
 
         let lastMessage = null;
-        let squashedMessages = [];
+        const squashedMessages = [];
+        const modifiedMessages = new Set();
 
-        for (let message of this.messages.collection) {
+        for (const message of this.messages.collection) {
             // Force exclude empty messages
             if (message.role === 'system' && !message.content) {
                 continue;
             }
 
-            const shouldSquash = (message) => {
-                return !excludeList.includes(message.identifier) && message.role === 'system' && !message.name;
+            const shouldSquash = (msg) => {
+                return !excludeList.includes(msg.identifier) && msg.role === 'system' && !msg.name;
             };
 
             if (shouldSquash(message)) {
                 if (lastMessage && shouldSquash(lastMessage)) {
                     lastMessage.content += '\n' + message.content;
-                    lastMessage.tokens = await tokenHandler.countAsync({ role: lastMessage.role, content: lastMessage.content });
+                    modifiedMessages.add(lastMessage);
                 } else {
                     squashedMessages.push(message);
                     lastMessage = message;
@@ -4012,6 +4020,10 @@ export class ChatCompletion {
                 squashedMessages.push(message);
                 lastMessage = message;
             }
+        }
+
+        for (const message of modifiedMessages) {
+            message.tokens = await tokenHandler.countAsync({ role: message.role, content: message.content });
         }
 
         this.messages.collection = squashedMessages;
@@ -5164,6 +5176,14 @@ function onSettingsPresetChange() {
 function getMaxContextOpenAI(value) {
     if (oai_settings.max_context_unlocked) {
         return unlocked_max;
+    }
+
+    if (Array.isArray(model_list) && model_list.length > 0) {
+        const found = model_list.find(x => x.id === value || x.name === value);
+        const context = found?.context_length ?? found?.inputTokenLimit ?? found?.max_context_length;
+        if (Number.isFinite(context) && context > 0) {
+            return context;
+        }
     }
 
     /** @type {[RegExp, number][]} */

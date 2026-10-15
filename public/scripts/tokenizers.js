@@ -156,6 +156,97 @@ const TOKENIZER_URLS = {
 const textEncoder = new TextEncoder();
 const objectStore = localforage.createInstance({ name: 'SillyTavern_ChatCompletions' });
 
+/**
+ * Bounded LRU cache for token counts.
+ * Uses a Proxy to transparently support property access (e.g., cache[key])
+ * as well as explicit get(key) and set(key, val) methods.
+ */
+export class BoundedTokenCache {
+    /**
+     * @param {number} [max] Maximum cache entries.
+     * @param {Record<string, number>|Iterable<[string, number]>} [entries] Initial entries.
+     */
+    constructor(max = 2000, entries = null) {
+        this.max = max;
+        this.cache = new Map();
+
+        if (entries) {
+            const iterable = /** @type {Iterable<[string, number]>} */ (
+                Symbol.iterator in Object(entries) ? entries : Object.entries(entries)
+            );
+            for (const [key, val] of iterable) {
+                this.set(key, val);
+            }
+        }
+
+        return new Proxy(this, {
+            get(target, prop, receiver) {
+                if (typeof prop === 'string' && !(prop in target)) {
+                    return target.get(prop);
+                }
+                return Reflect.get(target, prop, receiver);
+            },
+            set(target, prop, value, receiver) {
+                if (typeof prop === 'string' && !(prop in target)) {
+                    target.set(prop, value);
+                    return true;
+                }
+                return Reflect.set(target, prop, value, receiver);
+            },
+            has(target, prop) {
+                if (typeof prop === 'string' && !(prop in target)) {
+                    return target.has(prop);
+                }
+                return Reflect.has(target, prop);
+            },
+            deleteProperty(target, prop) {
+                if (typeof prop === 'string' && !(prop in target)) {
+                    return target.delete(prop);
+                }
+                return Reflect.deleteProperty(target, prop);
+            },
+        });
+    }
+
+    get(key) {
+        if (!this.cache.has(key)) return undefined;
+        const val = this.cache.get(key);
+        this.cache.delete(key);
+        this.cache.set(key, val);
+        return val;
+    }
+
+    set(key, val) {
+        if (this.cache.has(key)) {
+            this.cache.delete(key);
+        } else if (this.cache.size >= this.max) {
+            const oldestKey = this.cache.keys().next().value;
+            this.cache.delete(oldestKey);
+        }
+        this.cache.set(key, val);
+    }
+
+    has(key) {
+        return this.cache.has(key);
+    }
+
+    delete(key) {
+        return this.cache.delete(key);
+    }
+
+    clear() {
+        this.cache.clear();
+    }
+
+    get size() {
+        return this.cache.size;
+    }
+
+    toJSON() {
+        return Object.fromEntries(this.cache);
+    }
+}
+
 let tokenCache = {};
 
 /**
@@ -181,7 +272,11 @@ async function loadTokenCache() {
 export async function saveTokenCache() {
     try {
         console.debug('Chat Completions: saving token cache');
-        await objectStore.setItem('tokenCache', tokenCache);
+        const serialized = {};
+        for (const [key, val] of Object.entries(tokenCache)) {
+            serialized[key] = (val && typeof val.toJSON === 'function') ? val.toJSON() : val;
+        }
+        await objectStore.setItem('tokenCache', serialized);
     } catch (e) {
         console.log('Chat Completions: unable to save token cache', e);
     }
@@ -903,8 +998,8 @@ function getTokenCacheObject() {
         console.log('No character / group selected. Using default cache item');
     }
 
-    if (typeof tokenCache[chatId] !== 'object') {
-        tokenCache[chatId] = {};
+    if (!(tokenCache[chatId] instanceof BoundedTokenCache)) {
+        tokenCache[chatId] = new BoundedTokenCache(2000, tokenCache[chatId]);
     }
 
     return tokenCache[String(chatId)];
