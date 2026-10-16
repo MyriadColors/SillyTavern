@@ -2787,6 +2787,18 @@ router.post('/generate', async function (request, response) {
             /** @type {any} */
             const json = await fetchResponse.json();
             console.debug('Chat Completion response:', json);
+            if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DIGITALOCEAN) {
+                const pricing = DIGITALOCEAN_PRICES[request.body.model] ?? DIGITALOCEAN_PRICES[json?.model];
+                const promptTokens = Number(json?.usage?.prompt_tokens);
+                const completionTokens = Number(json?.usage?.completion_tokens);
+                if (pricing && Number.isFinite(promptTokens) && Number.isFinite(completionTokens)) {
+                    // Static map has no cache-read discount, so cached tokens bill at full input price.
+                    // reasoning_tokens are already included in completion_tokens (OpenAI convention).
+                    const input = promptTokens / 1000000 * pricing.input;
+                    const output = completionTokens / 1000000 * pricing.output;
+                    json.cost = { input, output, total: input + output };
+                }
+            }
             return response.send(json);
         } else {
             const responseText = await fetchResponse.text();

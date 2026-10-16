@@ -2699,7 +2699,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
 
     messageElement.find('.avatar img').attr('src', avatarImg);
     messageElement.find('.ch_name .name_text').text(mes.name);
-    messageElement.find('.timestamp').text(timestamp).attr('title', `${mes.extra?.api ? mes.extra.api + ' - ' : ''}${mes.extra?.model ?? ''}`);
+    messageElement.find('.timestamp').text(timestamp).attr('title', getMessageTimestampTitle(mes));
     messageElement.find('.mesIDDisplay').text(`#${messageId}`);
     tokenCount && messageElement.find('.tokenCounterDisplay').text(`${tokenCount}t`);
     mes.title && messageElement.attr('title', mes.title);
@@ -5583,6 +5583,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
             parseAndSaveLogprobs(data, continue_mag);
+            saveCostForActiveMessage(data);
         }
 
         if (canPerformToolCalls) {
@@ -6312,6 +6313,58 @@ function parseAndSaveLogprobs(data, continueFrom) {
     }
 
     saveLogprobsForActiveMessage(logprobs, continueFrom);
+}
+
+/**
+ * Saves API usage and computed cost from a non-streaming generation response
+ * to the currently active message. Only populated when the backend attaches a
+ * `cost` sibling field (currently DigitalOcean via the static pricing map).
+ * @param {object} data Response data from the API
+ */
+function saveCostForActiveMessage(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return;
+    }
+
+    if (!data.cost || typeof data.cost !== 'object' || Array.isArray(data.cost)) {
+        return;
+    }
+
+    if (chat.length === 0) {
+        return;
+    }
+
+    const message = chat[chat.length - 1];
+    if (!message.extra || typeof message.extra !== 'object') {
+        message.extra = {};
+    }
+
+    message.extra.api_cost = { ...data.cost };
+    if (data.usage && typeof data.usage === 'object' && !Array.isArray(data.usage)) {
+        message.extra.api_usage = { ...data.usage };
+    }
+}
+
+/**
+ * Builds the timestamp tooltip for a message, including API cost when known.
+ * @param {object} mes Chat message
+ * @returns {string} Tooltip text
+ */
+function getMessageTimestampTitle(mes) {
+    const base = `${mes.extra?.api ? mes.extra.api + ' - ' : ''}${mes.extra?.model ?? ''}`;
+    const total = Number(mes.extra?.api_cost?.total);
+
+    if (!Number.isFinite(total)) {
+        return base;
+    }
+
+    const promptTokens = Number(mes.extra?.api_usage?.prompt_tokens);
+    const completionTokens = Number(mes.extra?.api_usage?.completion_tokens);
+    const tokens = Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
+        ? ` (${promptTokens} in / ${completionTokens} out)`
+        : '';
+
+    return `${base} - $${total.toFixed(4)}${tokens}`;
 }
 
 /**
