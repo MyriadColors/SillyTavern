@@ -15,7 +15,7 @@ import { createThumbnail, isValidUrl } from '../utils.js';
  */
 export async function getMultimodalCaption(base64Img, prompt) {
     const useReverseProxy =
-        (['openai', 'anthropic', 'google', 'mistral', 'vertexai', 'xai', 'zai', 'moonshot'].includes(extension_settings.caption.multimodal_api))
+        (['openai', 'anthropic', 'google', 'mistral', 'vertexai', 'xai', 'zai', 'moonshot', 'digitalocean'].includes(extension_settings.caption.multimodal_api))
         && extension_settings.caption.allow_reverse_proxy
         && oai_settings.reverse_proxy
         && isValidUrl(oai_settings.reverse_proxy);
@@ -294,6 +294,10 @@ function throwIfInvalidModel(useReverseProxy) {
 
     if (multimodalApi === 'workers_ai' && (!secret_state[SECRET_KEYS.WORKERS_AI] || !oai_settings.workers_ai_account_id)) {
         throw new Error('Workers AI API key or account ID is not set.');
+    }
+
+    if (multimodalApi === 'digitalocean' && !secret_state[SECRET_KEYS.DIGITALOCEAN] && !useReverseProxy) {
+        throw new Error('DigitalOcean API key is not set.');
     }
 }
 

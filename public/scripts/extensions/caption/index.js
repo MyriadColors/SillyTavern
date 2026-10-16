@@ -505,6 +505,7 @@ export async function init() {
                         'xai': SECRET_KEYS.XAI,
                         'zai': SECRET_KEYS.ZAI,
                         'moonshot': SECRET_KEYS.MOONSHOT,
+                        'digitalocean': SECRET_KEYS.DIGITALOCEAN,
                     };
 
                     if (reverseProxyApis[api]) {
@@ -640,6 +641,7 @@ export async function init() {
         await processEndpoint('mistral', '/api/backends/chat-completions/multimodal-models/mistral');
         await processEndpoint('xai', '/api/backends/chat-completions/multimodal-models/xai');
         await processEndpoint('moonshot', '/api/backends/chat-completions/multimodal-models/moonshot');
+        await processEndpoint('digitalocean', '/api/backends/chat-completions/multimodal-models/digitalocean');
         await processEndpoint('workers_ai', '/api/backends/chat-completions/multimodal-models/workers_ai', { workers_ai_account_id: oai_settings.workers_ai_account_id });
     }
 

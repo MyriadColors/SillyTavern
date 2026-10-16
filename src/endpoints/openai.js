@@ -108,6 +108,10 @@ router.post('/caption-image', async (request, response) => {
             key = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
         }
 
+        if (request.body.api === 'digitalocean' && !request.body.reverse_proxy) {
+            key = readSecret(request.user.directories, SECRET_KEYS.DIGITALOCEAN);
+        }
+
         const noKeyTypes = ['custom', 'ooba', 'koboldcpp', 'vllm', 'llamacpp'];
         if (!key && !request.body.reverse_proxy && !noKeyTypes.includes(request.body.api)) {
             console.warn('No key found for API', request.body.api);
@@ -229,6 +233,10 @@ router.post('/caption-image', async (request, response) => {
                 return response.status(400).send({ error: 'Cloudflare Workers AI Account ID is required' });
             }
             apiUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/v1/chat/completions`;
+        }
+
+        if (request.body.api === 'digitalocean' && !request.body.reverse_proxy) {
+            apiUrl = 'https://inference.do-ai.run/v1/chat/completions';
         }
 
         if (['koboldcpp', 'vllm', 'llamacpp', 'ooba'].includes(request.body.api)) {

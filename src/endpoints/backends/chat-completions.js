@@ -69,6 +69,7 @@ import {
 import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
 import { getCookieSecret } from '../../users.js';
 import { fetchGoogleModels, GoogleModelsHttpError } from './google-models.js';
+import { DIGITALOCEAN_PRICES } from '../../digitalocean-pricing.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -99,6 +100,7 @@ const API_MINIMAX = 'https://api.minimax.io/v1';
 const API_MINIMAX_CN = 'https://api.minimaxi.com/v1';
 const API_OPENROUTER = 'https://openrouter.ai/api/v1';
 const API_WORKERS_AI = 'https://api.cloudflare.com/client/v4/accounts';
+const API_DIGITALOCEAN = 'https://inference.do-ai.run/v1';
 
 /**
  * Module-scoped Claude caching configuration values.
@@ -2085,6 +2087,10 @@ router.post('/status', async function (request, statusResponse) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.SILICONFLOW, request.body.secret_id);
             headers = {};
             queryParams = { type: 'text', sub_type: 'chat' };
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DIGITALOCEAN) {
+            apiUrl = new URL(request.body.reverse_proxy || API_DIGITALOCEAN).toString();
+            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.DIGITALOCEAN, request.body.secret_id);
+            headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.WORKERS_AI) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI, request.body.secret_id);
 
@@ -2174,6 +2180,13 @@ router.post('/status', async function (request, statusResponse) {
                         }
                         return model;
                     });
+            }
+
+            if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DIGITALOCEAN && Array.isArray(data?.data)) {
+                data.data = data.data.map(model => {
+                    const pricing = model?.id && DIGITALOCEAN_PRICES[model.id];
+                    return pricing ? { ...model, pricing: { ...pricing } } : model;
+                });
             }
 
             statusResponse.send(data);
@@ -2642,6 +2655,14 @@ router.post('/generate', async function (request, response) {
             if (request.body.json_schema) {
                 setJsonObjectFormat(bodyParams, request.body.messages, request.body.json_schema);
             }
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DIGITALOCEAN) {
+            apiUrl = new URL(request.body.reverse_proxy || API_DIGITALOCEAN).toString();
+            apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.DIGITALOCEAN, request.body.secret_id);
+            headers = {};
+            bodyParams = {};
+            if (request.body.json_schema) {
+                setJsonObjectFormat(bodyParams, request.body.messages, request.body.json_schema);
+            }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.WORKERS_AI) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI, request.body.secret_id);
             const accountId = String(request.body.workers_ai_account_id || '').trim();
@@ -3043,7 +3064,113 @@ multimodalModels.post('/workers_ai', async (req, res) => {
     }
 });
 
+multimodalModels.post('/digitalocean', async (req, res) => {
+    try {
+        const key = readSecret(req.user.directories, SECRET_KEYS.DIGITALOCEAN);
+
+        if (!key) {
+            return res.json([]);
+        }
+
+        const response = await fetch('https://inference.do-ai.run/v1/models', {
+            headers: {
+                'Authorization': `Bearer ${key}`,
+            },
+        });
+
+        if (!response.ok) {
+            return res.json([]);
+        }
+
+        /** @type {any} */
+        const data = await response.json();
+
+        if (!Array.isArray(data?.data)) {
+            return res.json([]);
+        }
+
+        // DO /v1/models does not expose modality flags. Match known vision-capable families.
+        const visionPattern = /(vl|vision|multimodal|nemotron.*vl|qwen.*vl|llama.*vision|pixtral|kimi.*vision)/i;
+        const models = data.data.filter(m => typeof m?.id === 'string' && visionPattern.test(m.id)).map(m => m.id);
+        return res.json(models);
+    } catch (error) {
+        console.error(error);
+        return res.sendStatus(500);
+    }
+});
+
 router.use('/multimodal-models', multimodalModels);
+
+router.get('/digitalocean-pricing', async function (_request, response) {
+    try {
+        const { DIGITALOCEAN_PRICES, DIGITALOCEAN_PRICING_UPDATED } = await import('../../digitalocean-pricing.js');
+        return response.json({ updated: DIGITALOCEAN_PRICING_UPDATED, prices: DIGITALOCEAN_PRICES });
+    } catch (error) {
+        console.error(error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/digitalocean-pricing/refresh', async function (_request, response) {
+    try {
+        const { writeFile } = await import('node:fs/promises');
+        const { fileURLToPath } = await import('node:url');
+        const path = (await import('node:path')).default;
+
+        const candidates = [
+            'https://models.dev/catalog.json?type=all',
+            'https://models.dev/api.json?type=all',
+        ];
+
+        let prices = null;
+        let lastError = null;
+        for (const url of candidates) {
+            try {
+                const result = await fetch(url);
+                if (!result.ok) {
+                    throw new Error(`HTTP ${result.status}`);
+                }
+                const catalog = await result.json();
+                const root = catalog?.providers ?? catalog;
+                const provider = root?.digitalocean;
+                if (!provider) {
+                    throw new Error('DigitalOcean provider missing');
+                }
+                const models = provider.models ?? provider;
+                const entries = Array.isArray(models) ? models.map(m => [m.id ?? m.name, m]) : Object.entries(models);
+                prices = {};
+                for (const [id, model] of entries) {
+                    const cost = model?.cost ?? model?.pricing;
+                    const input = Number(cost?.input);
+                    const output = Number(cost?.output);
+                    if (id && Number.isFinite(input) && Number.isFinite(output)) {
+                        prices[String(id)] = { input, output };
+                    }
+                }
+                if (Object.keys(prices).length > 0) {
+                    break;
+                }
+                prices = null;
+            } catch (error) {
+                lastError = error;
+            }
+        }
+
+        if (!prices) {
+            console.error('DigitalOcean pricing refresh failed:', lastError);
+            return response.status(502).send({ error: true, message: 'Pricing refresh failed' });
+        }
+
+        const today = new Date().toISOString().slice(0, 10);
+        const body = Object.keys(prices).sort().map(id => `    '${id}': { input: ${prices[id].input}, output: ${prices[id].output} },`).join('\n');
+        const output = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'digitalocean-pricing.js');
+        await writeFile(output, `// DigitalOcean serverless inference pricing (USD per 1M tokens).\n// Static source of truth - DigitalOcean has no pricing API (GET /v1/models returns only ids).\n// Seeded from https://docs.digitalocean.com/products/inference/details/pricing/.\n// Refresh on demand via \`npm run update-digitalocean-pricing\` (pulls structured data from models.dev).\nexport const DIGITALOCEAN_PRICING_UPDATED = '${today}';\nexport const DIGITALOCEAN_PRICING_SOURCE = 'https://models.dev/';\n\nexport const DIGITALOCEAN_PRICES = {\n${body}\n};\n`);
+        return response.json({ updated: today, count: Object.keys(prices).length });
+    } catch (error) {
+        console.error(error);
+        return response.sendStatus(500);
+    }
+});
 
 router.post('/process', async function (request, response) {
     try {

@@ -139,7 +139,8 @@
         "lint:fix": "eslint \"src/**/*.js\" \"public/**/*.js\" ./*.js --fix",
         "backup": "bun backup.ts",
         "plugins:update": "bun plugins update",
-        "plugins:install": "bun plugins install"
+        "plugins:install": "bun plugins install",
+        "update-digitalocean-pricing": "node scripts/update-digitalocean-pricing.mjs"
     },
     "bin": {
         "sillytavern": "./src/server-global.js"
