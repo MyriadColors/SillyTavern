@@ -3,7 +3,7 @@ import fs from 'node:fs';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { CheckRepoActions, default as simpleGit } from 'simple-git';
+import { CheckRepoActions, simpleGit } from 'simple-git';
 
 import { PUBLIC_DIRECTORIES } from '../constants.js';
 import { color, getConfigValue, isValidUrl, safeReadJsonSync } from '../util.js';

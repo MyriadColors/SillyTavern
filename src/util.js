@@ -8,14 +8,13 @@ import { Buffer } from 'node:buffer';
 import { promises as dnsPromise } from 'node:dns';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import readline from 'node:readline';
 
 import yaml from 'yaml';
 import { sync as commandExistsSync } from 'command-exists';
 import _ from 'lodash';
 import yauzl from 'yauzl';
 import mime from 'mime-types';
-import { default as simpleGit } from 'simple-git';
+import { simpleGit } from 'simple-git';
 import chalk from 'chalk';
 import bytes from 'bytes';
 import { LOG_LEVELS, CHAT_COMPLETION_SOURCES, MEDIA_REQUEST_TYPE } from './constants.js';
@@ -1660,25 +1659,30 @@ export function tryDeleteFile(filePath) {
 
 /**
  * Reads the first line of a file asynchronously.
+ * Splits strictly on LF so that literal U+2028/U+2029 characters inside the
+ * line (valid in JSON strings, but treated as breaks by node:readline) do not
+ * truncate the result.
  * @param {string} filePath Path to the file
  * @returns {Promise<string>} The first line of the file
  */
 export async function readFirstLine(filePath) {
     let stream;
-    let rl;
     try {
         stream = fs.createReadStream(filePath, { encoding: 'utf8' });
-        rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-        for await (const line of rl) {
-            return line;
+        let buffer = '';
+        for await (const chunk of stream) {
+            buffer += chunk;
+            const newlineIndex = buffer.indexOf('\n');
+            if (newlineIndex !== -1) {
+                return buffer.slice(0, newlineIndex).replace(/\r$/, '');
+            }
         }
-        return '';
+        return buffer.replace(/\r$/, '');
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.error(`Error reading first line of ${filePath}:`, errorMessage);
         return '';
     } finally {
-        rl?.close();
         stream?.destroy();
     }
 }

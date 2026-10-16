@@ -183,6 +183,13 @@ describe('readFirstLine', () => {
             warnSpy.mockRestore();
         }
     });
+
+    test('does not truncate the first line at U+2028/U+2029 separators', async () => {
+        const filePath = path.join(tmpDir, 'separators.txt');
+        fs.writeFileSync(filePath, 'first\u2028line\u2029end\nsecond line');
+        const line = await readFirstLine(filePath);
+        expect(line).toBe('first\u2028line\u2029end');
+    });
 });
 
 describe('getChatInfo', () => {

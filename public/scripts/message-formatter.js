@@ -9,7 +9,7 @@ import { messageFormatting } from '../script.js';
  *                      that should be invisible to regex rules.
  * - `AFTER_REGEX`    – After custom regex rules, before Markdown conversion.
  *                      The text is still plain Markdown at this point.
- * - `AFTER_MARKDOWN` – After Markdown-to-HTML conversion (showdown), before
+ * - `AFTER_MARKDOWN` – After Markdown-to-HTML conversion (marked), before
  *                      DOMPurify. The value is an HTML string. This is the
  *                      **default** stage and the most common insertion point
  *                      for extensions that want to annotate rendered HTML (e.g.

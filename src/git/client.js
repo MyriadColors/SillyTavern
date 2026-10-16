@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { sync as commandExistsSync } from 'command-exists';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/node';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 
 /** @type {{ AUTO: 'auto', SYSTEM: 'system', BUILTIN: 'builtin' }} */
 export const GIT_BACKENDS = {

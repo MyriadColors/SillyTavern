@@ -821,5 +821,18 @@ describe('getFileNameValidationFunction', () => {
         expect(next).toHaveBeenCalled();
         expect(res.sendStatus).not.toHaveBeenCalled();
     });
+
+    test('rejects explicit null values', () => {
+        // /api/chats/search group mode must omit avatar_url rather than send
+        // null, because the validator rejects non-string values with a 400.
+        const middleware = getFileNameValidationFunction('avatar_url');
+        const req = { body: { avatar_url: null, group_id: 'some-group' } };
+        const res = { sendStatus: jest.fn() };
+        const next = jest.fn();
+
+        middleware(req, res, next);
+        expect(res.sendStatus).toHaveBeenCalledWith(400);
+        expect(next).not.toHaveBeenCalled();
+    });
 });
 

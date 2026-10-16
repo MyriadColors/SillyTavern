@@ -127,4 +127,76 @@ describe('getChatInfo', () => {
         expect(nonMatching.match).toBe(false);
         expect(nonMatching.file_name).toBe('chat.jsonl');
     });
+
+    test('reads full info when messages contain literal U+2028/U+2029 separators', async () => {
+        // Model output can contain raw U+2028/U+2029 chars. They are valid inside
+        // JSON strings, but node:readline treats them as line breaks and would
+        // fragment the record into unparseable pieces.
+        const header = JSON.stringify({ user_name: 'User', character_name: 'Char', chat_metadata: {} });
+        const body = 'Engine bay\u2028with a line separator\u2029and a paragraph separator';
+        const message = JSON.stringify({ name: 'Char', is_user: false, mes: body, send_date: '2026-02-19T13:48:00.559Z' });
+        fs.writeFileSync(chatFile, `${header}\n${message}`);
+
+        const info = await chats.getChatInfo(chatFile);
+        expect(info.file_name).toBe('chat.jsonl');
+        expect(info.chat_items).toBe(1);
+        expect(info.mes).toBe(body);
+        expect(info.last_mes).toBe('2026-02-19T13:48:00.559Z');
+        expect(info.match).toBe(true);
+    });
+
+    test('matcher sees message text containing literal U+2028/U+2029 separators', async () => {
+        const header = JSON.stringify({ user_name: 'User', character_name: 'Char', chat_metadata: {} });
+        const message = JSON.stringify({ name: 'Char', is_user: false, mes: 'sweltering\u2028maze', send_date: '2026-02-19T13:48:00.559Z' });
+        fs.writeFileSync(chatFile, `${header}\n${message}`);
+
+        const matching = await chats.getChatInfo(chatFile, {}, false, lines => lines.some(l => l.includes('sweltering')));
+        expect(matching.match).toBe(true);
+        expect(matching.chat_items).toBe(1);
+        expect(matching.mes).toBe('sweltering\u2028maze');
+    });
+});
+
+describe('serializeChatLine', () => {
+    test('escapes U+2028/U+2029 without changing the parsed value', () => {
+        const message = { name: 'Char', mes: 'a\u2028b\u2029c' };
+        const line = chats.serializeChatLine(message);
+        expect(line).not.toMatch(/\u2028/);
+        expect(line).not.toMatch(/\u2029/);
+        expect(line).toContain('\\u2028');
+        expect(line).toContain('\\u2029');
+        expect(JSON.parse(line)).toEqual(message);
+        // Escaped records stay on exactly one LF-delimited line
+        expect(line).not.toContain('\n');
+    });
+});
+
+describe('trySaveChat', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-chat-save-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('saved chats with U+2028/U+2029 round-trip through getChatInfo', async () => {
+        const chatFile = path.join(tmpDir, 'chat.jsonl');
+        const body = 'Engine bay\u2028with separators\u2029inside';
+        await chats.trySaveChat([
+            { user_name: 'User', character_name: 'Char', chat_metadata: {} },
+            { name: 'Char', is_user: false, mes: body, send_date: '2026-02-19T13:48:00.559Z' },
+        ], chatFile, false, 'handle', 'Char', tmpDir);
+
+        const raw = fs.readFileSync(chatFile, 'utf8');
+        expect(raw).not.toMatch(/\u2028/);
+        expect(raw).not.toMatch(/\u2029/);
+
+        const info = await chats.getChatInfo(chatFile);
+        expect(info.chat_items).toBe(1);
+        expect(info.mes).toBe(body);
+        expect(info.last_mes).toBe('2026-02-19T13:48:00.559Z');
+    });
 });

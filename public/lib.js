@@ -13,7 +13,8 @@ import Bowser from 'bowser';
 import DiffMatchPatch from 'diff-match-patch';
 import { isProbablyReaderable, Readability } from '@mozilla/readability';
 import SVGInject from '@iconfu/svg-inject';
-import showdown from 'showdown';
+import showdown from './scripts/showdown-shim.js';
+import * as marked from 'marked';
 import moment from 'moment';
 import seedrandom from 'seedrandom';
 import * as Popper from '@popperjs/core';
@@ -67,6 +68,10 @@ export function initLibraryShims() {
         // @ts-ignore
         window.showdown = showdown;
     }
+    if (!('marked' in window)) {
+        // @ts-ignore
+        window.marked = marked;
+    }
     if (!('moment' in window)) {
         // @ts-ignore
         window.moment = moment;
@@ -95,6 +100,7 @@ export default {
     isProbablyReaderable,
     SVGInject,
     showdown,
+    marked,
     moment,
     seedrandom,
     Popper,
@@ -123,6 +129,7 @@ export {
     isProbablyReaderable,
     SVGInject,
     showdown,
+    marked,
     moment,
     seedrandom,
     Popper,

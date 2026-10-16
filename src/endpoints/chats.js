@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import process from 'node:process';
 
 import express from 'express';
@@ -497,88 +496,16 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
         return chatData;
     }
 
-    let fileStream;
-    let rl;
+    let lines;
     try {
-        fileStream = fs.createReadStream(pathToFile, { encoding: 'utf8' });
-        fileStream.on('error', (error) => {
-            if (error.code === 'ENOENT') {
-                return;
-            }
-        });
-
-        rl = readline.createInterface({
-            input: fileStream,
-            crlfDelay: Infinity,
-        });
-
-        rl.on('error', (error) => {
-            if (error.code === 'ENOENT') {
-                return;
-            }
-        });
-
-        let lastLine;
-        let itemCounter = 0;
-        let hasAnyMatch = false;
-        let matchBuffer = [];
-
-        for await (const line of rl) {
-            if (withMetadata && itemCounter === 0) {
-                const jsonData = tryParse(line);
-                if (jsonData && _.isObjectLike(jsonData.chat_metadata)) {
-                    chatData.chat_metadata = jsonData.chat_metadata;
-                }
-            }
-            // Skip matching if any match was already found
-            if (hasMatcher && !hasAnyMatch && itemCounter > 0) {
-                const jsonData = tryParse(line);
-                if (jsonData) {
-                    matchBuffer.push(jsonData.mes || '');
-                    if (matcher(matchBuffer)) {
-                        hasAnyMatch = true;
-                        matchBuffer = [];
-                    }
-                }
-            }
-            itemCounter++;
-            lastLine = line;
-        }
-
-        if (lastLine) {
-            const jsonData = tryParse(lastLine);
-            if (jsonData && (jsonData.name || jsonData.character_name || jsonData.chat_metadata)) {
-                chatData.chat_items = (itemCounter - 1);
-                chatData.mes = jsonData.mes || '[The message is empty]';
-                chatData.last_mes = jsonData.send_date || new Date(Math.round(stats.mtimeMs)).toISOString();
-                chatData.match = hasMatcher ? hasAnyMatch : true;
-
-                if (!hasMatcher && !withMetadata) {
-                    ChatMetadataCache.set(pathToFile, stats, {
-                        isValid: true,
-                        fileId: chatData.file_id,
-                        fileName: chatData.file_name,
-                        fileSize: chatData.file_size,
-                        totalMessages: chatData.chat_items,
-                        previewMessage: chatData.mes,
-                        lastModifiedMs: typeof chatData.last_mes === 'number' ? chatData.last_mes : Date.parse(chatData.last_mes) || stats.mtimeMs,
-                    });
-                }
-                return chatData;
-            } else {
-                // The last line is unparseable or lacks known fields (e.g. a truncated write or an external edit).
-                // Resolve a degraded preview from the stat data instead of hiding an otherwise intact chat
-                // from the chat list, search and recents.
-                console.warn('Found an invalid or corrupted last line in a chat file:', pathToFile);
-                // Exclude both the metadata line and the unreadable trailing line.
-                chatData.chat_items = Math.max(itemCounter - 2, 0);
-                chatData.mes = '[The message is empty]';
-                chatData.match = hasMatcher ? hasAnyMatch : true;
-                return chatData;
-            }
-        } else {
-            // The file was truncated after the stat reported a non-zero size; treat it like an empty chat
-            return chatData;
+        // Split strictly on LF: node:readline also breaks on literal U+2028/U+2029
+        // characters that may legally appear inside JSON strings and would
+        // fragment records into unparseable pieces.
+        const content = await fs.promises.readFile(pathToFile, 'utf8');
+        lines = content.split('\n');
+        // A trailing newline terminates the last record; it is not a record itself.
+        if (lines.length > 0 && lines[lines.length - 1] === '') {
+            lines.pop();
         }
     } catch (error) {
         if (error.code === 'ENOENT') {
@@ -586,9 +513,69 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
         }
         console.warn('Failed to read chat file info for:', pathToFile, error?.message);
         return {};
-    } finally {
-        rl?.close();
-        fileStream?.destroy();
+    }
+
+    let lastLine;
+    let itemCounter = 0;
+    let hasAnyMatch = false;
+    let matchBuffer = [];
+
+    for (const line of lines) {
+        if (withMetadata && itemCounter === 0) {
+            const jsonData = tryParse(line);
+            if (jsonData && _.isObjectLike(jsonData.chat_metadata)) {
+                chatData.chat_metadata = jsonData.chat_metadata;
+            }
+        }
+        // Skip matching if any match was already found
+        if (hasMatcher && !hasAnyMatch && itemCounter > 0) {
+            const jsonData = tryParse(line);
+            if (jsonData) {
+                matchBuffer.push(jsonData.mes || '');
+                if (matcher(matchBuffer)) {
+                    hasAnyMatch = true;
+                    matchBuffer = [];
+                }
+            }
+        }
+        itemCounter++;
+        lastLine = line;
+    }
+
+    if (lastLine) {
+        const jsonData = tryParse(lastLine);
+        if (jsonData && (jsonData.name || jsonData.character_name || jsonData.chat_metadata)) {
+            chatData.chat_items = (itemCounter - 1);
+            chatData.mes = jsonData.mes || '[The message is empty]';
+            chatData.last_mes = jsonData.send_date || new Date(Math.round(stats.mtimeMs)).toISOString();
+            chatData.match = hasMatcher ? hasAnyMatch : true;
+
+            if (!hasMatcher && !withMetadata) {
+                ChatMetadataCache.set(pathToFile, stats, {
+                    isValid: true,
+                    fileId: chatData.file_id,
+                    fileName: chatData.file_name,
+                    fileSize: chatData.file_size,
+                    totalMessages: chatData.chat_items,
+                    previewMessage: chatData.mes,
+                    lastModifiedMs: typeof chatData.last_mes === 'number' ? chatData.last_mes : Date.parse(chatData.last_mes) || stats.mtimeMs,
+                });
+            }
+            return chatData;
+        } else {
+            // The last line is unparseable or lacks known fields (e.g. a truncated write or an external edit).
+            // Resolve a degraded preview from the stat data instead of hiding an otherwise intact chat
+            // from the chat list, search and recents.
+            console.warn('Found an invalid or corrupted last line in a chat file:', pathToFile);
+            // Exclude both the metadata line and the unreadable trailing line.
+            chatData.chat_items = Math.max(itemCounter - 2, 0);
+            chatData.mes = '[The message is empty]';
+            chatData.match = hasMatcher ? hasAnyMatch : true;
+            return chatData;
+        }
+    } else {
+        // The file was truncated after the stat reported a non-zero size; treat it like an empty chat
+        return chatData;
     }
 }
 
@@ -608,6 +595,19 @@ class IntegrityMismatchError extends Error {
 }
 
 /**
+ * Serializes a single chat message to a JSONL line.
+ * JSON.stringify leaves U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR
+ * literally in the output, but line-oriented readers treat them as line breaks
+ * and fragment the record. Escaping them keeps every record on exactly one
+ * LF-delimited line without changing the parsed value.
+ * @param {object} message Chat message object
+ * @returns {string} Serialized JSONL line
+ */
+export function serializeChatLine(message) {
+    return JSON.stringify(message).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
+/**
  * Tries to save the chat data to a file, performing an integrity check if required.
  * @param {Array} chatData The chat array to save.
  * @param {string} filePath Target file path for the data.
@@ -617,7 +617,7 @@ class IntegrityMismatchError extends Error {
  * @param {string} backupDirectory Passed to backupChat.
  */
 export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false, handle, cardName, backupDirectory) {
-    const jsonlData = chatData?.map(m => JSON.stringify(m)).join('\n');
+    const jsonlData = chatData?.map(m => serializeChatLine(m)).join('\n');
 
     const doIntegrityCheck = (checkIntegrity && !skipIntegrityCheck);
     const chatIntegritySlug = doIntegrityCheck ? chatData?.[0]?.chat_metadata?.integrity : undefined;
@@ -805,31 +805,34 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
             }
         }
 
-        const readStream = fs.createReadStream(filename);
-        const rl = readline.createInterface({
-            input: readStream,
-        });
+        // Read synchronously and split strictly on LF: node:readline also breaks
+        // on literal U+2028/U+2029 characters inside JSON strings and would
+        // fragment records into unparseable pieces.
+        const rawText = fs.readFileSync(filename, 'utf8');
+        const rawLines = rawText.split('\n');
+        // A trailing newline terminates the last record; it is not a record itself.
+        if (rawLines.length > 0 && rawLines[rawLines.length - 1] === '') {
+            rawLines.pop();
+        }
         let buffer = '';
-        rl.on('line', (line) => {
+        for (const line of rawLines) {
             const data = JSON.parse(line);
             // Skip non-printable/prompt-hidden messages
             if (data.is_system) {
-                return;
+                continue;
             }
             if (data.mes) {
                 const name = data.name;
                 const message = (data?.extra?.display_text || data?.mes || '').replace(/\r?\n/g, '\n');
                 buffer += (`${name}: ${message}\n\n`);
             }
-        });
-        rl.on('close', () => {
-            const successMessage = {
-                message: `Chat saved to ${exportfilename}`,
-                result: buffer,
-            };
-            console.info(`Chat exported as ${exportfilename}`);
-            return response.status(200).json(successMessage);
-        });
+        }
+        const successMessage = {
+            message: `Chat saved to ${exportfilename}`,
+            result: buffer,
+        };
+        console.info(`Chat exported as ${exportfilename}`);
+        return response.status(200).json(successMessage);
     } catch (err) {
         console.error('chat export failed.', err);
         return response.sendStatus(400);
@@ -1070,7 +1073,12 @@ router.post('/search', validateAvatarUrlMiddleware, async function (request, res
                 .map(chatId => path.join(groupChatsDir, `${chatId}.jsonl`))
                 .filter(fileName => fs.existsSync(fileName));
         } else {
-            // Regular character chat directory
+            // Regular character chat directory. A missing avatar_url (e.g. group
+            // mode omits it) has no character directory to scan; return empty
+            // instead of throwing on .replace().
+            if (typeof avatar_url !== 'string') {
+                return response.send([]);
+            }
             const character_name = avatar_url.replace('.png', '');
             const directoryPath = path.join(request.user.directories.chats, character_name);
 
@@ -1319,22 +1327,39 @@ export async function analyzeChatFile(filePath) {
         return emptyResult;
     }
 
-    let fileStream;
-    let rl;
+    let content;
     try {
-        fileStream = fs.createReadStream(filePath, { encoding: 'utf8' });
-        rl = readline.createInterface({
-            input: fileStream,
-            crlfDelay: Infinity,
-        });
+        // Split strictly on LF: node:readline also breaks on literal U+2028/U+2029
+        // characters that may legally appear inside JSON strings and would
+        // fragment records into unparseable pieces.
+        content = await fs.promises.readFile(filePath, 'utf8');
+    } catch (err) {
+        console.warn(`Could not analyze chat file: ${filePath}`, err);
+        return {
+            isValid: false,
+            fileId: parsedPath.name,
+            fileName: parsedPath.base,
+            filePath,
+            fileSize: '0 B',
+            fileSizeBytes: 0,
+            totalMessages: 0,
+            userMessagesCount: 0,
+            firstMessage: '',
+            contentHash: '',
+            lastModified: '',
+            lastModifiedMs: 0,
+            previewMessage: '',
+        };
+    }
 
+    try {
         let itemCounter = 0;
         let userMessagesCount = 0;
         let firstMessage = '';
         let lastMessage = '';
         const messagesForHash = [];
 
-        for await (const line of rl) {
+        for (const line of content.split('\n')) {
             if (!line.trim()) continue;
             const parsed = tryParse(line);
             if (!parsed) continue;
@@ -1394,8 +1419,6 @@ export async function analyzeChatFile(filePath) {
             lastModifiedMs: 0,
             previewMessage: '',
         };
-    } finally {
-        rl?.close();
     }
 }
 

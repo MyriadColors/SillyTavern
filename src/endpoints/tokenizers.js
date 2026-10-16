@@ -948,13 +948,119 @@ router.post('/openai/decode', async function (req, res) {
     }
 });
 
+/**
+ * Counts tokens for a single batch item (string or object) using the given tokenizer.
+ * @param {string|object} item Item to count
+ * @param {string} model Resolved model identifier
+ * @param {any} tokenizerInstance Tokenizer instance (Tiktoken, WebTokenizer, or SentencePieceTokenizer)
+ * @param {string} queryModel Original query model string
+ * @returns {Promise<number>} Number of tokens
+ */
+async function countSingleBatchItem(item, model, tokenizerInstance, queryModel) {
+    if (item === null || item === undefined) {
+        return 0;
+    }
+
+    try {
+        const isMessageObject = typeof item === 'object' && item !== null && 'role' in item;
+        const tokensPerName = queryModel.includes('gpt-3.5-turbo-0301') ? -1 : 1;
+        const tokensPerMessage = queryModel.includes('gpt-3.5-turbo-0301') ? 4 : 3;
+
+        let baseCount = 0;
+
+        if (webTokenizers.includes(model)) {
+            if (typeof item === 'string') {
+                baseCount = tokenizerInstance.encode(item).length;
+            } else if (isMessageObject) {
+                const text = Object.values(item).filter(v => typeof v === 'string').join('\n\n');
+                baseCount = tokenizerInstance.encode(text).length + tokensPerMessage;
+                if ('name' in item && typeof item.name === 'string') {
+                    baseCount += tokensPerName;
+                }
+            } else {
+                const text = Object.values(item).filter(v => typeof v === 'string').join('\n\n');
+                baseCount = tokenizerInstance.encode(text).length;
+            }
+        } else if (sentencepieceTokenizers.includes(model)) {
+            if (typeof item === 'string') {
+                const result = await countSentencepieceTokens(tokenizerInstance, item);
+                baseCount = result.count;
+            } else if (isMessageObject) {
+                const text = Object.values(item).filter(v => typeof v === 'string').join('\n\n');
+                const result = await countSentencepieceTokens(tokenizerInstance, text);
+                baseCount = result.count + tokensPerMessage;
+                if ('name' in item && typeof item.name === 'string') {
+                    baseCount += tokensPerName;
+                }
+            } else {
+                const text = Object.values(item).filter(v => typeof v === 'string').join('\n\n');
+                const result = await countSentencepieceTokens(tokenizerInstance, text);
+                baseCount = result.count;
+            }
+        } else {
+            // Tiktoken tokenizer
+            if (typeof item === 'string') {
+                baseCount = tokenizerInstance.encode(item).length;
+            } else if (isMessageObject) {
+                baseCount = tokensPerMessage;
+                for (const [key, value] of Object.entries(item)) {
+                    if (typeof value === 'string') {
+                        baseCount += tokenizerInstance.encode(value).length;
+                    }
+                    if (key === 'name') {
+                        baseCount += tokensPerName;
+                    }
+                }
+            } else {
+                for (const value of Object.values(item)) {
+                    if (typeof value === 'string') {
+                        baseCount += tokenizerInstance.encode(value).length;
+                    }
+                }
+            }
+        }
+
+        return baseCount;
+    } catch {
+        const fallbackText = typeof item === 'string' ? item : JSON.stringify(item);
+        return guesstimate(fallbackText);
+    }
+}
+
 router.post('/openai/count', async function (req, res) {
     try {
         if (!req.body) return res.sendStatus(400);
 
-        let num_tokens = 0;
         const queryModel = String(req.query.model || '');
         const model = getTokenizerModel(queryModel);
+
+        const isBatch = Array.isArray(req.body?.batch) || (Array.isArray(req.body) && req.body.some(item => typeof item === 'string'));
+        const batchItems = Array.isArray(req.body?.batch) ? req.body.batch : (isBatch ? req.body : null);
+
+        if (isBatch && Array.isArray(batchItems)) {
+            let instance = null;
+            if (webTokenizers.includes(model)) {
+                const tokenizer = getWebTokenizer(model);
+                instance = await tokenizer?.get();
+                if (!instance) throw new Error(`Failed to load the ${model} tokenizer`);
+            } else if (sentencepieceTokenizers.includes(model)) {
+                instance = getSentencepiceTokenizer(model);
+                if (!instance) throw new Error(`Failed to load the ${model} tokenizer`);
+            } else {
+                instance = getTiktokenTokenizer(model);
+            }
+
+            const counts = [];
+            for (const item of batchItems) {
+                const count = await countSingleBatchItem(item, model, instance, queryModel);
+                counts.push(count);
+            }
+
+            const token_count = counts.reduce((acc, c) => acc + c, 0);
+            return res.send({ token_count, counts });
+        }
+
+        let num_tokens = 0;
 
         if (model === 'claude') {
             const instance = await claude_tokenizer.get();
