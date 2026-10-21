@@ -70,6 +70,7 @@ import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
 import { getCookieSecret } from '../../users.js';
 import { fetchGoogleModels, GoogleModelsHttpError } from './google-models.js';
 import { DIGITALOCEAN_PRICES } from '../../digitalocean-pricing.js';
+import { logGoogleCost } from '../../google-pricing.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -741,6 +742,22 @@ async function sendMakerSuiteRequest(request, response) {
 
         if (stream) {
             try {
+                if (generateResponse.ok && generateResponse.body) {
+                    let buffer = '';
+                    let usage = null;
+                    const decoder = new TextDecoder();
+                    generateResponse.body.on('data', (/** @type {Buffer} */ chunk) => {
+                        buffer += decoder.decode(chunk, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() ?? '';
+                        for (const line of lines) {
+                            if (line.startsWith('data:') && line.includes('usageMetadata')) {
+                                usage = tryParse(line.slice(5).trim())?.usageMetadata ?? usage;
+                            }
+                        }
+                    });
+                    generateResponse.body.once('close', () => logGoogleCost(apiName, request.body.chat_completion_source, model, usage));
+                }
                 // Pipe remote SSE stream to Express response
                 await forwardFetchResponse(generateResponse, response);
             } catch (error) {
@@ -802,6 +819,10 @@ async function sendMakerSuiteRequest(request, response) {
 
             // Wrap it back to OAI format (responseContent includes thought signatures in parts array)
             const reply = { choices: [{ 'message': { 'content': responseText } }], responseContent };
+            const cost = logGoogleCost(apiName, request.body.chat_completion_source, model, generateResponseJson?.usageMetadata);
+            if (cost) {
+                reply.cost = cost;
+            }
             return response.send(reply);
         }
     } catch (error) {
