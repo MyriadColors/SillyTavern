@@ -6,7 +6,7 @@ import yaml from 'yaml';
 import yauzl from 'yauzl';
 import { sync as commandExistsSync } from 'command-exists';
 
-import { setConfigFilePath, generateTimestamp, isPathUnderParent } from './util.js';
+import { generateTimestamp, isPathUnderParent } from './util.js';
 import { initUserStorage, getUserDirectories, getAllUserHandles } from './users.js';
 import { DEFAULT_USER } from './constants.js';
 
@@ -546,10 +546,8 @@ export async function restoreUserBackup(archivePath, targetDir, options = {}) {
             await new Promise((resolve, reject) => {
                 const proc = spawn(sevenZipBin, ['l', resolvedArchive], {
                     windowsHide: true,
-                    stdio: ['ignore', 'pipe', 'pipe'],
+                    stdio: ['ignore', 'ignore', 'ignore'],
                 });
-                let stdout = '';
-                proc.stdout?.on('data', chunk => { stdout += chunk.toString(); });
                 proc.on('error', reject);
                 proc.on('close', code => {
                     if (code === 0) {
