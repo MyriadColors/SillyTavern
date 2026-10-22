@@ -157,6 +157,56 @@ describe('getChatInfo', () => {
     });
 });
 
+describe('normalizeGroupChatTags', () => {
+    test('trims, drops empty values and removes duplicates', () => {
+        expect(chats.normalizeGroupChatTags([' rp ', '', 'rp', 42, null])).toEqual(['rp', '42']);
+    });
+
+    test('returns an empty array for non-array input', () => {
+        expect(chats.normalizeGroupChatTags(undefined)).toEqual([]);
+        expect(chats.normalizeGroupChatTags('tag')).toEqual([]);
+    });
+});
+
+describe('mergeChatRecords', () => {
+    const header = (name, metadata = {}) => ({ user_name: 'User', character_name: name, chat_metadata: metadata });
+    const message = (text, sendDate) => ({ name: 'Char', is_user: false, mes: text, send_date: sendDate });
+
+    test('orders messages chronologically and keeps the first header', () => {
+        const merged = chats.mergeChatRecords([
+            [header('First', { note: 'first' }), message('later', '2026-01-02T00:00:00.000Z')],
+            [header('Second'), message('earlier', '2026-01-01T00:00:00.000Z')],
+        ]);
+
+        expect(merged[0].character_name).toBe('First');
+        expect(merged[0].chat_metadata).toEqual({ note: 'first' });
+        expect(merged.slice(1).map(m => m.mes)).toEqual(['earlier', 'later']);
+    });
+
+    test('removes stale integrity metadata from the merged header', () => {
+        const merged = chats.mergeChatRecords([
+            [header('First', { integrity: 'abc', note: 'keep' }), message('one', '2026-01-01T00:00:00.000Z')],
+            [header('Second'), message('two', '2026-01-02T00:00:00.000Z')],
+        ]);
+
+        expect(merged[0].chat_metadata).toEqual({ note: 'keep' });
+    });
+
+    test('keeps undated messages after dated ones in input order', () => {
+        const merged = chats.mergeChatRecords([
+            [header('First'), message('undated-a'), message('dated', '2026-01-01T00:00:00.000Z')],
+            [header('Second'), message('undated-b')],
+        ]);
+
+        expect(merged.slice(1).map(m => m.mes)).toEqual(['dated', 'undated-a', 'undated-b']);
+    });
+
+    test('returns an empty array when there is nothing to merge', () => {
+        expect(chats.mergeChatRecords([])).toEqual([]);
+        expect(chats.mergeChatRecords([[], null])).toEqual([]);
+    });
+});
+
 describe('serializeChatLine', () => {
     test('escapes U+2028/U+2029 without changing the parsed value', () => {
         const message = { name: 'Char', mes: 'a\u2028b\u2029c' };

@@ -20,6 +20,7 @@ import {
     DEFAULT_AUTO_MODE_DELAY,
     group_activation_strategy,
     group_generation_mode,
+    group_greeting_mode,
     groups,
     openGroupById,
     openGroupChat,
@@ -375,6 +376,7 @@ export async function convertSoloToGroupChat() {
         chats: chats,
         hideMutedSprites: false,
         generation_mode: group_generation_mode.SWAP,
+        greeting_mode: group_greeting_mode.ALL_ENABLED,
         auto_mode_delay: DEFAULT_AUTO_MODE_DELAY,
     };
 

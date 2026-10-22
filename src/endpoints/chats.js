@@ -657,6 +657,66 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
 });
 
 /**
+ * Normalizes a list of group chat tags for storage.
+ * @param {unknown} tags Raw tags
+ * @returns {string[]} Trimmed, unique, non-empty tags
+ */
+export function normalizeGroupChatTags(tags) {
+    if (!Array.isArray(tags)) {
+        return [];
+    }
+
+    const normalized = tags
+        .filter(tag => tag !== null && tag !== undefined)
+        .map(tag => String(tag).trim())
+        .filter(tag => tag.length > 0);
+
+    return [...new Set(normalized)];
+}
+
+/**
+ * Merges multiple parsed chat files into one, ordering messages chronologically.
+ * The first chat's header is used as the merged header; integrity metadata is removed
+ * because the message list no longer matches the original hash.
+ * @param {Array<Array<object>>} chatRecords Parsed chats, each starting with a header
+ * @returns {Array<object>} Merged chat records
+ */
+export function mergeChatRecords(chatRecords) {
+    const validRecords = (Array.isArray(chatRecords) ? chatRecords : [])
+        .filter(record => Array.isArray(record) && record.length > 0);
+
+    if (validRecords.length === 0) {
+        return [];
+    }
+
+    const headers = validRecords
+        .map(record => record[0])
+        .filter(header => header && typeof header === 'object' && !header.mes);
+
+    const header = structuredClone(headers[0] ?? { user_name: 'User', character_name: 'Group' });
+
+    if (header.chat_metadata && typeof header.chat_metadata === 'object') {
+        delete header.chat_metadata.integrity;
+    }
+
+    let messageIndex = 0;
+    const messages = validRecords.flatMap(record => record.slice(1))
+        .filter(message => message && typeof message === 'object' && (message.mes !== undefined || message.is_user !== undefined))
+        .map(message => ({ message, index: messageIndex++ }));
+
+    messages.sort((a, b) => {
+        const aTime = Date.parse(a.message.send_date);
+        const bTime = Date.parse(b.message.send_date);
+        const aValue = Number.isNaN(aTime) ? Number.POSITIVE_INFINITY : aTime;
+        const bValue = Number.isNaN(bTime) ? Number.POSITIVE_INFINITY : bTime;
+
+        return aValue - bValue || a.index - b.index;
+    });
+
+    return [header, ...messages.map(entry => entry.message)];
+}
+
+/**
  * Gets the chat as an object.
  * @param {string} chatFilePath The full chat file path.
  * @returns {Array}} If the chatFilePath cannot be read, this will return [].
@@ -980,10 +1040,111 @@ router.post('/group/info', async (request, response) => {
         const id = request.body.id;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
 
-        const chatInfo = await getChatInfo(chatFilePath);
+        const chatInfo = await getChatInfo(chatFilePath, {}, request.body.with_metadata === true);
         return response.send(chatInfo);
     } catch (error) {
         console.error(error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/group/tags', async (request, response) => {
+    try {
+        if (!request.body || !request.body.id || !Array.isArray(request.body.tags)) {
+            return response.sendStatus(400);
+        }
+
+        const id = String(request.body.id);
+        const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
+
+        if (!isPathUnderParent(request.user.directories.groupChats, chatFilePath)) {
+            return response.sendStatus(400);
+        }
+
+        const chatData = getChatData(chatFilePath);
+
+        if (!Array.isArray(chatData) || chatData.length === 0) {
+            return response.sendStatus(404);
+        }
+
+        const tags = normalizeGroupChatTags(request.body.tags);
+
+        chatData[0].chat_metadata = chatData[0].chat_metadata ?? {};
+        chatData[0].chat_metadata.group_chat_tags = tags;
+
+        await trySaveChat(
+            chatData,
+            chatFilePath,
+            false,
+            request.user.profile.handle,
+            id,
+            request.user.directories.backups,
+        );
+
+        return response.send({ ok: true, tags: chatData[0].chat_metadata.group_chat_tags });
+    } catch (error) {
+        console.error('Error saving group chat tags:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/group/merge', async (request, response) => {
+    try {
+        const groupId = String(request.body?.group_id ?? '');
+        const chatIds = Array.isArray(request.body?.chat_ids)
+            ? [...new Set(request.body.chat_ids.map(id => String(id)))]
+            : [];
+
+        if (!groupId || chatIds.length < 2) {
+            return response.status(400).send({ error: 'At least two chats are required for a merge.' });
+        }
+
+        const groupFilePath = path.join(request.user.directories.groups, sanitize(`${groupId}.json`));
+        if (!isPathUnderParent(request.user.directories.groups, groupFilePath)) {
+            return response.sendStatus(400);
+        }
+
+        const group = tryParse(tryReadFileSync(groupFilePath));
+        if (!group || !Array.isArray(group.chats) || !chatIds.every(id => group.chats.includes(id))) {
+            return response.status(400).send({ error: 'All chats must belong to the same group.' });
+        }
+
+        const sourcePaths = chatIds.map(id => path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`)));
+        if (!sourcePaths.every(filePath => isPathUnderParent(request.user.directories.groupChats, filePath))) {
+            return response.sendStatus(400);
+        }
+
+        const chatRecords = sourcePaths.map(filePath => getChatData(filePath)).filter(record => record.length > 0);
+        const mergedChat = mergeChatRecords(chatRecords);
+
+        if (mergedChat.length < 2) {
+            return response.status(400).send({ error: 'The selected chats have no messages to merge.' });
+        }
+
+        const requestedName = String(request.body?.name ?? '').trim();
+        const mergedName = sanitize(requestedName || humanizedDateTime());
+        const mergedFilePath = path.join(request.user.directories.groupChats, `${mergedName}.jsonl`);
+
+        if (!isPathUnderParent(request.user.directories.groupChats, mergedFilePath) || fs.existsSync(mergedFilePath)) {
+            return response.status(400).send({ error: 'A chat with that name already exists.' });
+        }
+
+        await trySaveChat(
+            mergedChat,
+            mergedFilePath,
+            true,
+            request.user.profile.handle,
+            mergedName,
+            request.user.directories.backups,
+        );
+
+        for (const sourcePath of sourcePaths) {
+            tryDeleteFile(sourcePath);
+        }
+
+        return response.send({ ok: true, name: mergedName });
+    } catch (error) {
+        console.error('Error merging group chats:', error);
         return response.sendStatus(500);
     }
 });

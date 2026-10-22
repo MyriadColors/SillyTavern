@@ -87,8 +87,11 @@ import { POPUP_TYPE, Popup, callGenericPopup } from './popup.js';
 import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { compressRequest } from './request-compression.js';
+import { buildDefaultGreetingEntries, getGreetingCandidates, group_greeting_mode, group_greeting_source, resolveGreetingEntry } from './group-greetings.js';
+import { showGroupGreetingPicker } from './group-greetings-ui.js';
 
 export {
+    group_greeting_mode,
     selected_group,
     openGroupId,
     is_group_automode_enabled,
@@ -250,9 +253,13 @@ async function validateGroup(group) {
  * Loads the chat messages for a specific group.
  * @param {string} groupId - The ID of the group to load chat messages for.
  * @param {boolean} reload - Whether to reload the group chat after loading.
+ * @param {object} [options] - Additional options
+ * @param {boolean} [options.interactive] - Whether the greeting picker may be shown
+ * @param {{entries: object[]}|null} [options.greetingSelection] - Saved greeting selection to reuse
+ * @param {boolean} [options.forceFresh] - Regenerate the chat even if the file has messages
  * @returns {Promise<void>} A promise that resolves when the chat messages have been loaded.
  */
-export async function getGroupChat(groupId, reload = false) {
+export async function getGroupChat(groupId, reload = false, { interactive = false, greetingSelection = null, forceFresh = false } = {}) {
     const group = groups.find((x) => x.id === groupId);
     if (!group) {
         console.warn('Group not found', groupId);
@@ -266,7 +273,7 @@ export async function getGroupChat(groupId, reload = false) {
     const chat_id = group.chat_id;
     const data = await loadGroupChat(chat_id);
     const metadata = data?.[0]?.chat_metadata ?? {};
-    const freshChat = !metadata.tainted && (!Array.isArray(data) || !data.length);
+    const freshChat = forceFresh || (!metadata.tainted && (!Array.isArray(data) || !data.length));
 
     // Remove chat file header if present
     if (Array.isArray(data) && data.length && Object.hasOwn(data[0], 'chat_metadata')) {
@@ -283,13 +290,23 @@ export async function getGroupChat(groupId, reload = false) {
     if (group && Array.isArray(group.members) && freshChat) {
         chat.splice(0, chat.length);
         chatElement.find('.mes').remove();
-        for (let member of group.members) {
-            const character = characters.find(x => x.avatar === member || x.name === member);
-            if (!character) {
-                continue;
-            }
+        const { entries, messages } = await prepareGroupGreetingMessages(group, {
+            interactive,
+            savedSelection: greetingSelection ?? metadata.group_greetings,
+        });
+        metadata.group_greetings = { version: 1, entries };
 
-            const mes = await getFirstCharacterMessage(character);
+        const introMessage = getGroupIntroMessage(group, metadata);
+
+        if (introMessage) {
+            chat.push(introMessage);
+            await eventSource.emit(event_types.MESSAGE_RECEIVED, (chat.length - 1), 'group_intro');
+            addOneMessage(introMessage);
+            await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, (chat.length - 1), 'group_intro');
+        }
+
+        for (const { character, greeting } of messages) {
+            const mes = await getFirstCharacterMessage(character, greeting);
 
             // No first message
             if (!(mes?.mes)) {
@@ -301,6 +318,8 @@ export async function getGroupChat(groupId, reload = false) {
             addOneMessage(mes);
             await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, (chat.length - 1), 'first_message');
         }
+
+        updateChatMetadata(metadata, true);
         await saveGroupChat(groupId, false);
     } else if (Array.isArray(data) && data.length) {
         chat.splice(0, chat.length, ...data);
@@ -571,23 +590,132 @@ export function getGroupCharacterCardsLazy(groupId, characterId) {
 }
 
 /**
+ * Builds the narrator message used as a group intro.
+ * @param {Group} group Group object
+ * @param {object} [metadata] Chat metadata
+ * @returns {ChatMessage|null} Intro message or null when the group has no intro
+ */
+function getGroupIntroMessage(group, metadata = {}) {
+    const rawText = String(group?.group_intro ?? '').trim();
+
+    if (!rawText) {
+        return null;
+    }
+
+    const messageText = baseChatReplace(rawText);
+
+    if (!messageText.trim()) {
+        return null;
+    }
+
+    return {
+        name: metadata.narrator_name || t`System`,
+        is_user: false,
+        is_system: false,
+        send_date: getMessageTimeStamp(),
+        mes: messageText,
+        force_avatar: system_avatar,
+        extra: {
+            type: system_message_types.NARRATOR,
+            gen_id: Date.now(),
+            api: 'manual',
+            model: 'group intro',
+        },
+    };
+}
+
+/**
+ * Resolves the greetings for a fresh group chat and prepares their messages.
+ * @param {Group} group Group object
+ * @param {object} [options] Options
+ * @param {boolean} [options.interactive] Whether the picker may be shown
+ * @param {{entries: object[]}|null} [options.savedSelection] Previously saved selection
+ * @returns {Promise<{entries: object[], messages: {character: Character, greeting: object}[]}>} Resolved entries and messages
+ */
+async function prepareGroupGreetingMessages(group, { interactive = false, savedSelection = null } = {}) {
+    const disabledMembers = new Set(Array.isArray(group.disabled_members) ? group.disabled_members : []);
+    const mode = Number(group.greeting_mode ?? group_greeting_mode.ALL_ENABLED);
+    const savedEntries = Array.isArray(savedSelection?.entries) ? savedSelection.entries : null;
+    let rawEntries;
+
+    if (savedEntries) {
+        rawEntries = savedEntries;
+    } else if (interactive) {
+        const members = group.members.map(avatar => {
+            const character = characters.find(x => x.avatar === avatar || x.name === avatar);
+            return {
+                avatar,
+                name: character?.name ?? avatar,
+                disabled: disabledMembers.has(avatar),
+                candidates: getGreetingCandidates(character),
+            };
+        });
+        rawEntries = await showGroupGreetingPicker({ members, mode });
+    } else {
+        rawEntries = buildDefaultGreetingEntries({
+            members: group.members,
+            disabledMembers: [...disabledMembers],
+            mode,
+        });
+    }
+
+    const entries = [];
+    const messages = [];
+
+    for (const rawEntry of rawEntries) {
+        if (!rawEntry?.avatar || !group.members.includes(rawEntry.avatar)) {
+            continue;
+        }
+
+        if (disabledMembers.has(rawEntry.avatar)) {
+            entries.push({ avatar: rawEntry.avatar, source: group_greeting_source.NONE });
+            continue;
+        }
+
+        const character = characters.find(x => x.avatar === rawEntry.avatar || x.name === rawEntry.avatar);
+
+        if (!character) {
+            continue;
+        }
+
+        const greeting = resolveGreetingEntry(character, rawEntry);
+
+        if (!greeting) {
+            entries.push({ avatar: rawEntry.avatar, source: group_greeting_source.NONE });
+            continue;
+        }
+
+        entries.push({
+            avatar: rawEntry.avatar,
+            source: greeting.source,
+            index: greeting.index,
+            text: greeting.text,
+        });
+        messages.push({ character, greeting });
+    }
+
+    return { entries, messages };
+}
+
+/**
  * Gets the first message for a character.
  * @param {Character} character Character object
+ * @param {{text?: string}|null} [greeting] Pre-resolved greeting
  * @returns {Promise<ChatMessage>} First message object
  */
-async function getFirstCharacterMessage(character) {
-    let messageText = character.first_mes;
+async function getFirstCharacterMessage(character, greeting = null) {
+    let messageText = greeting?.text || character.first_mes;
 
     const groupOnlyGreetings = Array.isArray(character.data?.group_only_greetings) && character.data.group_only_greetings.length > 0
         ? character.data.group_only_greetings
         : (Array.isArray(character.group_only_greetings) && character.group_only_greetings.length > 0 ? character.group_only_greetings : null);
 
-    if (groupOnlyGreetings) {
+    if (!greeting && groupOnlyGreetings) {
         const messageTexts = groupOnlyGreetings.filter(x => x);
         if (messageTexts.length > 0) {
             messageText = messageTexts[Math.floor(Math.random() * messageTexts.length)];
         }
-    } else if (Array.isArray(character.data?.alternate_greetings)) {
+    } else if (!greeting && Array.isArray(character.data?.alternate_greetings)) {
         const messageTexts = [character.first_mes, ...character.data.alternate_greetings].filter(x => x);
         messageText = messageTexts[Math.floor(Math.random() * messageTexts.length)];
     }
@@ -1516,6 +1644,22 @@ async function onGroupGenerationModeInput(e) {
     }
 }
 
+async function onGroupGreetingModeInput(e) {
+    if (openGroupId) {
+        let _thisGroup = groups.find((x) => x.id == openGroupId);
+        _thisGroup.greeting_mode = Number(e.target.value);
+        await editGroup(openGroupId, false, false);
+    }
+}
+
+async function onGroupIntroInput(e) {
+    if (openGroupId) {
+        let _thisGroup = groups.find((x) => x.id == openGroupId);
+        _thisGroup.group_intro = String(e.target.value);
+        await editGroup(openGroupId, false, false);
+    }
+}
+
 async function onGroupAutoModeDelayInput(e) {
     if (openGroupId) {
         let _thisGroup = groups.find((x) => x.id == openGroupId);
@@ -1816,6 +1960,7 @@ function select_group_chats(groupId, skipAnimation) {
     const groupName = group?.name ?? '';
     const replyStrategy = Number(group?.activation_strategy ?? group_activation_strategy.NATURAL);
     const generationMode = Number(group?.generation_mode ?? group_generation_mode.SWAP);
+    const greetingMode = Number(group?.greeting_mode ?? group_greeting_mode.ALL_ENABLED);
 
     setMenuType(group ? 'group_edit' : 'group_create');
     $('#group_avatar_preview').empty().append(getGroupAvatar(group));
@@ -1826,6 +1971,8 @@ function select_group_chats(groupId, skipAnimation) {
     $(`#rm_group_activation_strategy option[value="${replyStrategy}"]`).prop('selected', true);
     $('#rm_group_generation_mode').val(generationMode);
     $(`#rm_group_generation_mode option[value="${generationMode}"]`).prop('selected', true);
+    $('#rm_group_greeting_mode').val(greetingMode);
+    $(`#rm_group_greeting_mode option[value="${greetingMode}"]`).prop('selected', true);
     $('#rm_group_chat_name').val(groupName);
 
     if (!skipAnimation) {
@@ -1847,6 +1994,7 @@ function select_group_chats(groupId, skipAnimation) {
 
     $('#rm_group_generation_mode_join_prefix').val(group?.generation_mode_join_prefix ?? '').attr('setting', 'generation_mode_join_prefix');
     $('#rm_group_generation_mode_join_suffix').val(group?.generation_mode_join_suffix ?? '').attr('setting', 'generation_mode_join_suffix');
+    $('#rm_group_intro').val(group?.group_intro ?? '');
     toggleHiddenControls(group, generationMode);
 
     // bottom buttons
@@ -1854,6 +2002,7 @@ function select_group_chats(groupId, skipAnimation) {
         $('#rm_group_submit').hide();
         $('#rm_group_delete').show();
         $('#rm_group_scenario').show();
+        $('#rm_group_chat_manager').show();
         $('#group-metadata-controls .chat_lorebook_button').removeClass('disabled').prop('disabled', false);
         $('#group_open_media_overrides').show();
         const isMediaAllowed = isExternalMediaAllowed();
@@ -1866,6 +2015,7 @@ function select_group_chats(groupId, skipAnimation) {
         }
         $('#rm_group_delete').hide();
         $('#rm_group_scenario').hide();
+        $('#rm_group_chat_manager').hide();
         $('#group-metadata-controls .chat_lorebook_button').addClass('disabled').prop('disabled', true);
         $('#group_open_media_overrides').hide();
     }
@@ -2049,7 +2199,7 @@ export async function openGroupById(groupId) {
             selected_group = groupId;
             setEditedMessageId(undefined);
             updateChatMetadata({}, true);
-            await getGroupChat(groupId);
+            await getGroupChat(groupId, false, { interactive: true });
             return true;
         }
     }
@@ -2099,7 +2249,9 @@ async function createGroup() {
     let allowSelfResponses = !!$('#rm_group_allow_self_responses').prop('checked');
     let activationStrategy = Number($('#rm_group_activation_strategy').find(':selected').val()) ?? group_activation_strategy.NATURAL;
     let generationMode = Number($('#rm_group_generation_mode').find(':selected').val()) ?? group_generation_mode.SWAP;
+    let greetingMode = Number($('#rm_group_greeting_mode').find(':selected').val()) ?? group_greeting_mode.ALL_ENABLED;
     let autoModeDelay = Number($('#rm_group_automode_delay').val()) ?? DEFAULT_AUTO_MODE_DELAY;
+    const groupIntro = String($('#rm_group_intro').val() ?? '');
     const members = newGroupMembers;
     const memberNames = characters.filter(x => members.includes(x.avatar)).map(x => x.name).join(', ');
 
@@ -2120,6 +2272,8 @@ async function createGroup() {
         hideMutedSprites: hideMutedSprites,
         activation_strategy: activationStrategy,
         generation_mode: generationMode,
+        greeting_mode: greetingMode,
+        group_intro: groupIntro,
         disabled_members: [],
         fav: fav_grp_checked,
         chat_id: chatName,
@@ -2161,15 +2315,17 @@ export async function createNewGroupChat(groupId) {
     updateChatMetadata({}, true);
 
     await editGroup(group.id, true, false);
-    await getGroupChat(group.id);
+    await getGroupChat(group.id, false, { interactive: true });
 }
 
 /**
  * Retrieves past chats for a specified group.
  * @param {string} groupId Group ID
+ * @param {object} [options] Options
+ * @param {boolean} [options.withMetadata] Whether to include chat metadata
  * @returns {Promise<Array<import('../../src/endpoints/chats.js').ChatInfo>>} Array of past chats
  */
-export async function getGroupPastChats(groupId) {
+export async function getGroupPastChats(groupId, { withMetadata = false } = {}) {
     const group = groups.find(x => x.id === groupId);
 
     if (!group) {
@@ -2183,7 +2339,7 @@ export async function getGroupPastChats(groupId) {
             const response = await fetch('/api/chats/group/info', {
                 method: 'POST',
                 headers: getRequestHeaders(),
-                body: JSON.stringify({ id: chatId }),
+                body: JSON.stringify({ id: chatId, with_metadata: withMetadata }),
             });
             if (response.ok) {
                 const data = await response.json();
@@ -2216,7 +2372,7 @@ export async function openGroupChat(groupId, chatId) {
     updateChatMetadata({}, true);
 
     await editGroup(groupId, true, false);
-    await getGroupChat(groupId);
+    await getGroupChat(groupId, false, { interactive: true });
 }
 
 /**
@@ -2474,6 +2630,14 @@ jQuery(() => {
     $('#rm_group_members_filter').on('input', filterGroupMemberList);
     $('#rm_group_submit').on('click', createGroup);
     $('#rm_group_scenario').on('click', setCharacterSettingsOverrides);
+    $('#rm_group_chat_manager').off().on('click', async () => {
+        if (!openGroupId) {
+            return;
+        }
+
+        const { showGroupChatManager } = await import('./group-chat-manager.js');
+        await showGroupChatManager({ groupId: openGroupId });
+    });
     $('#rm_group_automode').on('input', function () {
         const value = $(this).prop('checked');
         is_group_automode_enabled = value;
@@ -2492,9 +2656,11 @@ jQuery(() => {
     $('#rm_group_allow_self_responses').on('input', onGroupSelfResponsesClick);
     $('#rm_group_activation_strategy').on('change', onGroupActivationStrategyInput);
     $('#rm_group_generation_mode').on('change', onGroupGenerationModeInput);
+    $('#rm_group_greeting_mode').on('change', onGroupGreetingModeInput);
     $('#rm_group_automode_delay').on('input', onGroupAutoModeDelayInput);
     $('#rm_group_generation_mode_join_prefix').on('input', onGroupGenerationModeTemplateInput);
     $('#rm_group_generation_mode_join_suffix').on('input', onGroupGenerationModeTemplateInput);
+    $('#rm_group_intro').on('input', onGroupIntroInput);
     $('#group_avatar_button').on('input', uploadGroupAvatar);
     $('#rm_group_restore_avatar').on('click', restoreGroupAvatar);
     $(document).on('click', '.group_member .right_menu_button', onGroupActionClick);

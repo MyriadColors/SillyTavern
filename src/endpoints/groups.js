@@ -169,6 +169,8 @@ router.post('/create', (request, response) => {
         allow_self_responses: !!request.body.allow_self_responses,
         activation_strategy: request.body.activation_strategy ?? 0,
         generation_mode: request.body.generation_mode ?? 0,
+        greeting_mode: request.body.greeting_mode ?? 0,
+        group_intro: request.body.group_intro ?? '',
         disabled_members: request.body.disabled_members ?? [],
         fav: request.body.fav,
         chat_id: request.body.chat_id ?? id,

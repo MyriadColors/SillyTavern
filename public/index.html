@@ -6322,6 +6322,17 @@
                                                     <option value="2" data-i18n="Join character cards (include muted)">Join character cards (include muted)</option>
                                                 </select>
                                             </div>
+                                            <div class="flex1 flexGap5">
+                                                <label for="rm_group_greeting_mode" class="flexnowrap width100p whitespacenowrap" title="Choose which group members greet when a new chat starts. Muted members never greet." data-i18n="[title]Choose which group members greet when a new chat starts. Muted members never greet.">
+                                                    <span data-i18n="Group greeting mode">Group greeting mode</span>
+                                                </label>
+                                                <select id="rm_group_greeting_mode">
+                                                    <option value="0" data-i18n="All enabled members">All enabled members</option>
+                                                    <option value="1" data-i18n="First member only">First member only</option>
+                                                    <option value="2" data-i18n="None (empty start)">None (empty start)</option>
+                                                    <option value="3" data-i18n="Random subset">Random subset</option>
+                                                </select>
+                                            </div>
                                             <div class="flex1 flexGap5" title="Inserted before each part of the joined fields." data-i18n="[title]Inserted before each part of the joined fields.">
                                                 <label for="rm_group_generation_mode_join_prefix" class="flexnowrap width100p whitespacenowrap">
                                                     <span data-i18n="Join Prefix">Join Prefix</span>
@@ -6338,10 +6349,17 @@
                                                 </label>
                                                 <textarea id="rm_group_generation_mode_join_suffix" class="text_pole wide100p textarea_compact autoSetHeight" placeholder="&mdash;" rows="1"></textarea>
                                             </div>
+                                            <div class="flex1 flexGap5" title="Narrator message shown before member greetings in every new chat. Supports macros." data-i18n="[title]Narrator message shown before member greetings in every new chat. Supports macros.">
+                                                <label for="rm_group_intro" class="flexnowrap width100p whitespacenowrap">
+                                                    <span data-i18n="Group intro">Group intro</span>
+                                                </label>
+                                                <textarea id="rm_group_intro" class="text_pole wide100p textarea_compact autoSetHeight" placeholder="Optional narrator message" data-i18n="[placeholder]Optional narrator message" rows="2"></textarea>
+                                            </div>
                                         </div>
                                         <div id="GroupFavDelOkBack" class="flex-container flexGap5 spaceEvenly flex1">
                                             <div id="rm_button_back_from_group" class="heightFitContent margin0 menu_button fa-solid fa-fw fa-left-long"></div>
                                             <div id="rm_group_scenario" class="heightFitContent margin0 menu_button fa-solid fa-fw fa-scroll" title="Set group chat character settings overrides" data-i18n="[title]Set group chat character settings overrides"></div>
+                                            <div id="rm_group_chat_manager" class="heightFitContent margin0 menu_button fa-solid fa-fw fa-list" title="Manage group chats" data-i18n="[title]Manage group chats"></div>
                                             <div id="group_favorite_button" class="heightFitContent margin0 menu_button fa-solid fa-fw fa-star" title="Add to Favorites" data-i18n="[title]Add to Favorites"></div>
                                             <input id="rm_group_fav" type="hidden" />
                                             <div id="group_open_media_overrides" class="heightFitContent margin0 menu_button menu_button_icon open_media_overrides" title="Click to allow/forbid the use of external media for this group." data-i18n="[title]Click to allow/forbid the use of external media for this group.">
@@ -7706,6 +7724,18 @@
                         <span data-i18n="alternate_greetings_hint_1">Click the</span> <i class="fa-solid fa-plus"></i> <span data-i18n="alternate_greetings_hint_2">button to get started!</span>
                     </strong>
                 </div>
+                <hr>
+                <div class="title_restorable">
+                    <h3><span data-i18n="Group-only Greetings">Group-only Greetings</span></h3>
+                    <div class="menu_button menu_button_icon add_group_only_greeting">
+                        <i class="fa-solid fa-plus"></i>
+                        <span data-i18n="Add">Add</span>
+                    </div>
+                </div>
+                <small class="justifyLeft" data-i18n="Group_only_Greetings_desc">
+                    When present, these greetings are used instead of the first and alternate greetings in group chats.
+                </small>
+                <div class="group_only_greetings_list flexFlowColumn flex-container wide100p"></div>
             </div>
         </div>
         <div id="alternate_greeting_form_template" class="template_element">
@@ -7714,7 +7744,7 @@
                     <summary>
                         <div class="title_restorable gap5px">
                             <div class="flex-container alignItemsCenter">
-                                <strong><span data-i18n="Alternate Greeting #">Alternate Greeting #</span><span class="greeting_index"></span></strong>
+                                <strong><span class="greeting_type_label" data-i18n="Alternate Greeting #">Alternate Greeting #</span><span class="greeting_index"></span></strong>
                                 <i class="editor_maximize fa-solid fa-maximize right_menu_button" title="Expand the editor" data-i18n="[title]Expand the editor"></i>
                             </div>
                             <span class="expander"></span>

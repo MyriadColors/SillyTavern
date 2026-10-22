@@ -3483,6 +3483,72 @@ input[type=search]:focus::-webkit-search-cancel-button {
     outline: 2px solid var(--active);
 }
 
+.group_greeting_picker {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.group_greeting_list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.group_greeting_row {
+    padding: 4px 6px;
+    border-radius: 6px;
+}
+
+.group_greeting_row_disabled {
+    opacity: 0.55;
+}
+
+.group_greeting_name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.group_greeting_select {
+    max-width: 55%;
+}
+
+.group_chat_manager_list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.group_chat_manager_row {
+    padding: 6px 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+}
+
+.group_chat_manager_row_active {
+    border-color: var(--active);
+}
+
+.group_chat_manager_details {
+    min-width: 0;
+}
+
+.group_chat_manager_name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: bold;
+}
+
+.group_chat_manager_tag {
+    font-size: 0.85em;
+}
+
+.group_chat_manager_actions {
+    flex-wrap: nowrap;
+}
+
 #fav_chara_wrap {
     display: flex;
     margin: 5px 0px;

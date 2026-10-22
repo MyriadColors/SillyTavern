@@ -605,6 +605,7 @@ export let create_save = {
     world: '',
     talkativeness: talkativeness_default,
     alternate_greetings: [],
+    group_only_greetings: [],
     depth_prompt_prompt: '',
     depth_prompt_depth: depth_prompt_depth_default,
     depth_prompt_role: depth_prompt_role_default,
@@ -9762,6 +9763,25 @@ async function openCharacterWorldPopup() {
     await popup.show();
 }
 
+const greeting_kinds = {
+    alternate: {
+        rowClass: 'alternate_greeting',
+        textClass: 'alternate_greeting_text',
+        listSelector: '.alternate_greetings_list',
+        idPrefix: 'alternate_greeting',
+        label: () => t`Alternate Greeting #`,
+        deleteConfirm: () => t`Are you sure you want to delete this alternate greeting?`,
+    },
+    group_only: {
+        rowClass: 'group_only_greeting',
+        textClass: 'group_only_greeting_text',
+        listSelector: '.group_only_greetings_list',
+        idPrefix: 'group_only_greeting',
+        label: () => t`Group-only Greeting #`,
+        deleteConfirm: () => t`Are you sure you want to delete this group-only greeting?`,
+    },
+};
+
 function openAlternateGreetings() {
     const chid = $('.open_alternate_greetings').data('chid');
 
@@ -9769,14 +9789,20 @@ function openAlternateGreetings() {
         toastr.error('Does not have an Id for this character in editor menu.');
         return;
     } else {
-        // If the character does not have alternate greetings, create an empty array
+        // If the character does not have greeting arrays, create empty ones
         if (characters[chid] && !Array.isArray(characters[chid].data.alternate_greetings)) {
             characters[chid].data.alternate_greetings = [];
+        }
+        if (characters[chid] && !Array.isArray(characters[chid].data.group_only_greetings)) {
+            characters[chid].data.group_only_greetings = Array.isArray(characters[chid].group_only_greetings)
+                ? [...characters[chid].group_only_greetings]
+                : [];
         }
     }
 
     const template = $('#alternate_greetings_template .alternate_grettings').clone();
-    const getArray = () => menu_type == 'create' ? create_save.alternate_greetings : characters[chid].data.alternate_greetings;
+    const getAlternateArray = () => menu_type == 'create' ? create_save.alternate_greetings : characters[chid].data.alternate_greetings;
+    const getGroupOnlyArray = () => menu_type == 'create' ? create_save.group_only_greetings : characters[chid].data.group_only_greetings;
     const popup = new Popup(template, POPUP_TYPE.TEXT, '', {
         wide: true,
         large: true,
@@ -9788,17 +9814,30 @@ function openAlternateGreetings() {
         },
     });
 
-    for (let index = 0; index < getArray().length; index++) {
-        addAlternateGreeting(template, getArray()[index], index, getArray, popup);
+    for (let index = 0; index < getAlternateArray().length; index++) {
+        addAlternateGreeting(template, getAlternateArray()[index], index, getAlternateArray, popup, 'alternate');
+    }
+
+    for (let index = 0; index < getGroupOnlyArray().length; index++) {
+        addAlternateGreeting(template, getGroupOnlyArray()[index], index, getGroupOnlyArray, popup, 'group_only');
     }
 
     template.find('.add_alternate_greeting').on('click', function () {
-        const array = getArray();
+        const array = getAlternateArray();
         const index = array.length;
         array.push('');
-        addAlternateGreeting(template, '', index, getArray, popup);
+        addAlternateGreeting(template, '', index, getAlternateArray, popup, 'alternate');
         updateAlternateGreetingsHintVisibility(template);
         const list = template.find('.alternate_greetings_list');
+        list.scrollTop(list.prop('scrollHeight'));
+    });
+
+    template.find('.add_group_only_greeting').on('click', function () {
+        const array = getGroupOnlyArray();
+        const index = array.length;
+        array.push('');
+        addAlternateGreeting(template, '', index, getGroupOnlyArray, popup, 'group_only');
+        const list = template.find('.group_only_greetings_list');
         list.scrollTop(list.prop('scrollHeight'));
     });
 
@@ -9807,30 +9846,36 @@ function openAlternateGreetings() {
 }
 
 /**
- * Adds an alternate greeting to the template.
+ * Adds a greeting block to the template.
  * @param {JQuery<HTMLElement>} template
  * @param {string} greeting
  * @param {number} index
  * @param {() => any[]} getArray
  * @param {Popup} popup
+ * @param {'alternate'|'group_only'} [kind='alternate']
  */
-function addAlternateGreeting(template, greeting, index, getArray, popup) {
+function addAlternateGreeting(template, greeting, index, getArray, popup, kind = 'alternate') {
+    const config = greeting_kinds[kind];
     const greetingBlock = $('#alternate_greeting_form_template .alternate_greeting').clone();
+    const textId = `${config.idPrefix}_${index}`;
+    greetingBlock.addClass(config.rowClass);
     greetingBlock.attr('data-index', index);
+    greetingBlock.find('.greeting_type_label').text(config.label());
     greetingBlock.find('.alternate_greeting_text')
-        .attr('id', `alternate_greeting_${index}`)
+        .addClass(config.textClass)
+        .attr('id', textId)
         .on('input', async function () {
             const value = $(this).val();
             const array = getArray();
             array[index] = value;
         }).val(greeting);
-    greetingBlock.find('.editor_maximize').attr('data-for', `alternate_greeting_${index}`);
+    greetingBlock.find('.editor_maximize').attr('data-for', textId);
     greetingBlock.find('.greeting_index').text(index + 1);
     greetingBlock.find('.delete_alternate_greeting').on('click', async function (event) {
         event.preventDefault();
         event.stopPropagation();
 
-        const confirm = await callGenericPopup(t`Are you sure you want to delete this alternate greeting?`, POPUP_TYPE.CONFIRM);
+        const confirm = await callGenericPopup(config.deleteConfirm(), POPUP_TYPE.CONFIRM);
         if (!confirm) {
             return;
         }
@@ -9850,7 +9895,7 @@ function addAlternateGreeting(template, greeting, index, getArray, popup) {
     });
 
     /**
-     * Handles moving an alternate greeting up or down in the list.
+     * Handles moving a greeting up or down in the list.
      * @param {JQuery.ClickEvent} event - The click event
      * @param {number} direction - Direction to move: -1 for up, 1 for down
      */
@@ -9874,14 +9919,14 @@ function addAlternateGreeting(template, greeting, index, getArray, popup) {
         [array[index], array[newIndex]] = [array[newIndex], array[index]];
 
         // Update current greeting
-        greetingBlock.find('.alternate_greeting_text').val(array[index]);
+        greetingBlock.find(`.${config.textClass}`).val(array[index]);
 
         // Update adjacent greeting
-        const adjacentGreetingBlock = template.find(`.alternate_greeting[data-index="${newIndex}"]`);
-        adjacentGreetingBlock.find('.alternate_greeting_text').val(array[newIndex]);
+        const adjacentGreetingBlock = template.find(`.${config.rowClass}[data-index="${newIndex}"]`);
+        adjacentGreetingBlock.find(`.${config.textClass}`).val(array[newIndex]);
     }
 
-    template.find('.alternate_greetings_list').append(greetingBlock);
+    template.find(config.listSelector).append(greetingBlock);
 }
 
 /**
@@ -9927,6 +9972,11 @@ export async function createOrEditCharacter(e) {
             formData.delete('alternate_greetings');
             for (const value of create_save.alternate_greetings) {
                 formData.append('alternate_greetings', value);
+            }
+
+            formData.delete('group_only_greetings');
+            for (const value of create_save.group_only_greetings) {
+                formData.append('group_only_greetings', value);
             }
 
             formData.append('extensions', JSON.stringify(create_save.extensions));
@@ -10021,6 +10071,13 @@ export async function createOrEditCharacter(e) {
             if (characters[chid] && Array.isArray(characters[chid]?.data?.alternate_greetings)) {
                 for (const value of characters[chid].data.alternate_greetings) {
                     formData.append('alternate_greetings', value);
+                }
+            }
+
+            formData.delete('group_only_greetings');
+            if (characters[chid] && Array.isArray(characters[chid]?.data?.group_only_greetings)) {
+                for (const value of characters[chid].data.group_only_greetings) {
+                    formData.append('group_only_greetings', value);
                 }
             }
 
@@ -10815,8 +10872,9 @@ export async function resetChatToGreeting() {
     }
 
     if (selected_group) {
+        const greetingSelection = chat_metadata?.group_greetings ?? null;
         await clearChat({ clearData: true });
-        await getGroupChat(selected_group, true);
+        await getGroupChat(selected_group, true, { interactive: true, greetingSelection, forceFresh: true });
         return;
     }
 
