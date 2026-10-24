@@ -1,6 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { Marked } from 'marked';
-import { markedUnderlineExt, markedImgDimensionsExt } from '../public/scripts/marked-extensions.js';
+import { markedUnderlineExt, markedImgDimensionsExt, markdownSpaceParityExt } from '../public/scripts/marked-extensions.js';
 import { markdownUnderscoreExt } from '../public/scripts/marked-underscore.js';
 
 function buildMarkedInstance() {
@@ -15,6 +15,7 @@ function buildMarkedInstance() {
             markdownUnderscoreExt(),
         ],
     });
+    marked.use(markdownSpaceParityExt());
     return marked;
 }
 
@@ -86,5 +87,44 @@ describe('marked parity with showdown corpus', () => {
         expect(html).toContain('type="checkbox"');
         expect(html).toContain('todo');
         expect(html).toContain('done');
+    });
+
+    test('renders images with whitespace between ] and ( (showdown parity)', () => {
+        const md = '![] (https://cdn.example.com/files/a61a6295898f.png)';
+        const html = marked.parse(md).trim();
+        expect(html).toContain('<img src="https://cdn.example.com/files/a61a6295898f.png"');
+        expect(html).not.toContain('![] (');
+    });
+
+    test('renders image dimensions with whitespace between ] and (', () => {
+        const md = '![alt text] (https://example.com/image.png =100x200)';
+        const html = marked.parse(md).trim();
+        expect(html).toContain('width="100"');
+        expect(html).toContain('height="200"');
+    });
+
+    test('renders links with whitespace between ] and (', () => {
+        const md = '[text] (https://example.com)';
+        const html = marked.parse(md).trim();
+        expect(html).toBe('<p><a href="https://example.com">text</a></p>');
+    });
+
+    test('does not rewrite whitespace inside inline code', () => {
+        const md = '`![] (https://example.com/image.png)`';
+        const html = marked.parse(md).trim();
+        expect(html).toBe('<p><code>![] (https://example.com/image.png)</code></p>');
+    });
+
+    test('does not rewrite whitespace inside fenced code blocks', () => {
+        const md = '```\n![] (https://example.com/image.png)\n```';
+        const html = marked.parse(md).trim();
+        expect(html).toContain('![] (https://example.com/image.png)');
+        expect(html).not.toContain('<img');
+    });
+
+    test('still renders the no-whitespace form', () => {
+        const md = '![alt text](https://example.com/image.png)';
+        const html = marked.parse(md).trim();
+        expect(html).toBe('<p><img src="https://example.com/image.png" alt="alt text"></p>');
     });
 });

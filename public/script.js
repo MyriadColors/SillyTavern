@@ -219,7 +219,7 @@ import {
 import { checkOpenRouterAuth, initSecrets, readSecretState } from './scripts/secrets.js';
 import { markdownExclusionExt } from './scripts/marked-exclusion.js';
 import { markdownUnderscoreExt } from './scripts/marked-underscore.js';
-import { markedUnderlineExt, markedImgDimensionsExt } from './scripts/marked-extensions.js';
+import { markedUnderlineExt, markedImgDimensionsExt, markdownSpaceParityExt } from './scripts/marked-extensions.js';
 import { NOTE_MODULE_NAME, initAuthorsNote, metadata_keys, setFloatingPrompt, shouldWIAddPrompt } from './scripts/authors-note.js';
 import { registerPromptManagerMigration } from './scripts/PromptManager.js';
 import { getRegexedString, regex_placement } from './scripts/extensions/regex/engine.js';
@@ -541,6 +541,9 @@ export function reloadMarkdownProcessor() {
 
     // Inject the dinkus exclusion extension
     markedInstance.use(markdownExclusionExt());
+
+    // Restore Showdown's tolerance of whitespace between `]` and `(`
+    markedInstance.use(markdownSpaceParityExt());
 
     converter = {
         marked: markedInstance,

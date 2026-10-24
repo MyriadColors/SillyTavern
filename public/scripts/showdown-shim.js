@@ -1,5 +1,5 @@
 import { Marked } from 'marked';
-import { markedUnderlineExt, markedImgDimensionsExt } from './marked-extensions.js';
+import { markedUnderlineExt, markedImgDimensionsExt, markdownSpaceParityExt } from './marked-extensions.js';
 import { markdownUnderscoreExt } from './marked-underscore.js';
 
 let warnedDeprecation = false;
@@ -30,6 +30,8 @@ export function createDefaultMarkedInstance() {
             markdownUnderscoreExt(),
         ],
     });
+    // Restore Showdown's tolerance of whitespace between `]` and `(`
+    instance.use(markdownSpaceParityExt());
     return instance;
 }
 
