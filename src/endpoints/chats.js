@@ -16,6 +16,7 @@ import {
     generateTimestamp,
     removeOldBackups,
     formatBytes,
+    tryWriteFile,
     tryWriteFileSync,
     tryReadFileSync,
     tryDeleteFile,
@@ -625,7 +626,7 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
     if (chatIntegritySlug && !await checkChatIntegrity(filePath, chatIntegritySlug)) {
         throw new IntegrityMismatchError(`Chat integrity check failed for "${filePath}". The expected integrity slug was "${chatIntegritySlug}".`);
     }
-    tryWriteFileSync(filePath, jsonlData);
+    await tryWriteFile(filePath, jsonlData);
     getBackupFunction(handle, cardName)(backupDirectory, cardName, jsonlData);
 }
 

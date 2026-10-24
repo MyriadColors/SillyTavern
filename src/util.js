@@ -19,7 +19,7 @@ import chalk from 'chalk';
 import bytes from 'bytes';
 import { LOG_LEVELS, CHAT_COMPLETION_SOURCES, MEDIA_REQUEST_TYPE } from './constants.js';
 import { serverDirectory } from './server-directory.js';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic, { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { isFirefox } from './express-common.js';
 
 /**
@@ -1611,7 +1611,82 @@ export function flattenSchema(schema, api) {
 }
 
 /**
+ * Error codes that can indicate a transient file lock (antivirus scan, sync
+ * client, another process holding a handle) rather than a permanent failure.
+ * Atomic writes are retried when one of these is thrown.
+ * @type {Set<string>}
+ */
+const TRANSIENT_WRITE_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'ETXTBSY']);
+
+/**
+ * Extracts the error code from an unknown error value.
+ * @param {unknown} error
+ * @returns {string}
+ */
+function getErrorCode(error) {
+    if (error && typeof error === 'object' && 'code' in error) {
+        return String(error.code);
+    }
+    return '';
+}
+
+/**
+ * Synchronously sleeps without a busy loop.
+ * @param {number} ms Milliseconds to sleep
+ */
+function sleepSync(ms) {
+    globalThis.Atomics.wait(new Int32Array(new globalThis.SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Backoff delay for a write retry attempt, with jitter to avoid lockstep retries.
+ * @param {number} attempt Zero-based retry attempt index
+ * @returns {number} Delay in milliseconds
+ */
+function writeRetryDelay(attempt) {
+    return 25 * 2 ** attempt + Math.floor(Math.random() * 25);
+}
+
+/**
+ * Writes to a file atomically, creating its parent directories if needed.
+ * Retries transient file-lock errors and, if the file stays locked, falls back
+ * to a direct (non-atomic) write so a save is not lost.
+ * @param {string} filePath
+ * @param {string} data
+ */
+export async function tryWriteFile(filePath, data) {
+    const directory = path.dirname(filePath);
+    //Ensure the directory exists.
+    if (!fs.existsSync(directory)) {
+        fs.mkdirSync(directory, { recursive: true });
+    }
+    const maxAttempts = 6;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+            await writeFileAtomic(filePath, data, 'utf8');
+            if (attempt > 0) {
+                console.info(`Wrote ${filePath} on attempt ${attempt + 1} after a transient file lock.`);
+            }
+            return;
+        } catch (error) {
+            const code = getErrorCode(error);
+            if (!TRANSIENT_WRITE_ERROR_CODES.has(code)) {
+                throw error;
+            }
+            if (attempt === maxAttempts - 1) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                console.warn(`Atomic write of ${filePath} failed after ${maxAttempts} attempts (${errorMessage}). Falling back to a direct write.`);
+                await fs.promises.writeFile(filePath, data, 'utf8');
+                return;
+            }
+            await delay(writeRetryDelay(attempt));
+        }
+    }
+}
+
+/**
  * Writes to a file, creating it's parent directories if needed.
+ * Retries transient file-lock errors a few times before giving up.
  * @param {string} filePath
  * @param {string} data
  */
@@ -1621,7 +1696,19 @@ export function tryWriteFileSync(filePath, data) {
     if (!fs.existsSync(directory)) {
         fs.mkdirSync(directory, { recursive: true });
     }
-    writeFileAtomicSync(filePath, data, 'utf8');
+    const maxAttempts = 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+            writeFileAtomicSync(filePath, data, 'utf8');
+            return;
+        } catch (error) {
+            const code = getErrorCode(error);
+            if (!TRANSIENT_WRITE_ERROR_CODES.has(code) || attempt === maxAttempts - 1) {
+                throw error;
+            }
+            sleepSync(writeRetryDelay(attempt));
+        }
+    }
 }
 
 /**
