@@ -71,6 +71,7 @@ import { getCookieSecret } from '../../users.js';
 import { fetchGoogleModels, GoogleModelsHttpError } from './google-models.js';
 import { DIGITALOCEAN_PRICES } from '../../digitalocean-pricing.js';
 import { logGoogleCost } from '../../google-pricing.js';
+import { logRequestCost } from '../../pricing-hub.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -2405,7 +2406,10 @@ router.post('/generate', async function (request, response) {
             apiUrl = 'https://openrouter.ai/api/v1';
             apiKey = readSecret(request.user.directories, SECRET_KEYS.OPENROUTER, request.body.secret_id);
             // OpenRouter needs to pass the Referer and X-Title: https://openrouter.ai/docs#requests
-            headers = { ...OPENROUTER_HEADERS };
+            headers = {
+                ...OPENROUTER_HEADERS,
+                'X-OpenRouter-Metadata': 'enabled',
+            };
             const includeReasoning = Boolean(request.body.include_reasoning);
             bodyParams = {
                 transforms: getOpenRouterTransforms(request),
@@ -2493,6 +2497,10 @@ router.post('/generate', async function (request, response) {
 
             if (isGemini) {
                 bodyParams['safety_settings'] = GEMINI_SAFETY;
+            }
+
+            if (request.body.stream) {
+                bodyParams['stream_options'] = { include_usage: true };
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             apiUrl = request.body.custom_url;
@@ -2801,6 +2809,62 @@ router.post('/generate', async function (request, response) {
 
         if (request.body.stream) {
             console.info('Streaming request in progress');
+            if (fetchResponse.ok && fetchResponse.body && [CHAT_COMPLETION_SOURCES.OPENROUTER, CHAT_COMPLETION_SOURCES.DIGITALOCEAN].includes(request.body.chat_completion_source)) {
+                let buffer = '';
+                let usage = null;
+                let metadata = null;
+                let completed = false;
+                const decoder = new TextDecoder();
+
+                const onData = (/** @type {Buffer} */ chunk) => {
+                    buffer += decoder.decode(chunk, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() ?? '';
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed.startsWith('data:')) {
+                            const dataPayload = trimmed.slice(5).trim();
+                            if (dataPayload === '[DONE]') {
+                                completed = true;
+                            } else if (dataPayload) {
+                                const parsed = tryParse(dataPayload);
+                                if (parsed?.usage) {
+                                    usage = parsed.usage;
+                                }
+                                if (parsed?.openrouter_metadata) {
+                                    metadata = parsed.openrouter_metadata;
+                                }
+                            }
+                        }
+                    }
+                };
+
+                const cleanup = () => {
+                    fetchResponse.body.off('data', onData);
+                    fetchResponse.body.off('close', onClose);
+                    fetchResponse.body.off('error', onAbortOrError);
+                    response.off('close', onAbortOrError);
+                    controller.signal.removeEventListener('abort', onAbortOrError);
+                };
+
+                const onClose = () => {
+                    cleanup();
+                    if (completed && usage) {
+                        logRequestCost(request.body.chat_completion_source, request.body.model, usage, metadata);
+                    }
+                };
+
+                const onAbortOrError = () => {
+                    completed = false;
+                    cleanup();
+                };
+
+                fetchResponse.body.on('data', onData);
+                fetchResponse.body.once('close', onClose);
+                fetchResponse.body.once('error', onAbortOrError);
+                response.once('close', onAbortOrError);
+                controller.signal.addEventListener('abort', onAbortOrError, { once: true });
+            }
             return await forwardFetchResponse(fetchResponse, response);
         }
 
@@ -2808,7 +2872,10 @@ router.post('/generate', async function (request, response) {
             /** @type {any} */
             const json = await fetchResponse.json();
             console.debug('Chat Completion response:', json);
-            if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DIGITALOCEAN) {
+            const cost = logRequestCost(request.body.chat_completion_source, request.body.model, json?.usage, json?.openrouter_metadata);
+            if (cost) {
+                json.cost = cost;
+            } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DIGITALOCEAN) {
                 const pricing = DIGITALOCEAN_PRICES[request.body.model] ?? DIGITALOCEAN_PRICES[json?.model];
                 const promptTokens = Number(json?.usage?.prompt_tokens);
                 const completionTokens = Number(json?.usage?.completion_tokens);

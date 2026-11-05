@@ -71,6 +71,7 @@ import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
 import { initGooglePricing } from './google-pricing.js';
+import { initPricingHub } from './pricing-hub.js';
 import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
@@ -310,6 +311,7 @@ async function preSetupTasks() {
     await settingsInit();
     await statsInit();
     initGooglePricing();
+    initPricingHub();
 
     const pluginsDirectory = path.join(serverDirectory, 'plugins');
     const cleanupPlugins = await loadPlugins(app, pluginsDirectory);
