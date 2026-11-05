@@ -1811,10 +1811,16 @@ function getOpenRouterModelTemplate(option) {
         return option.text;
     }
 
-    let tokens_dollar = Number(1 / (1000 * model.pricing?.prompt));
-    let tokens_rounded = (Math.round(tokens_dollar * 1000) / 1000).toFixed(0);
+    const promptPerM = Number(model.pricing?.prompt) * 1e6;
+    const completionPerM = Number(model.pricing?.completion) * 1e6;
+    const formatRate = (n) => (n > 0 && n < 0.01) ? n.toFixed(4) : n.toFixed(2);
 
-    const price = 0 === Number(model.pricing?.prompt) ? 'Free' : `${tokens_rounded}k t/$ `;
+    let price = 'Unknown';
+    if (Number.isFinite(promptPerM) && Number.isFinite(completionPerM)) {
+        price = (promptPerM === 0 && completionPerM === 0)
+            ? 'Free'
+            : `$${formatRate(promptPerM)}/$${formatRate(completionPerM)} in/out Mtok`;
+    }
 
     return $((`
         <div class="flex-container flexFlowColumn" title="${DOMPurify.sanitize(model.id)}">

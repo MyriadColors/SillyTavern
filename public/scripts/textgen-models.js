@@ -374,10 +374,18 @@ export async function syncOpenRouterProvidersForModel(modelId, providersSelector
         updateOpenRouterProvidersWarning(providersSelector);
     };
 
-    if (!modelId || !modelId.includes('/')) {
-        $providers.find('option').prop('disabled', false);
+    const resetOptions = () => {
+        $providers.find('option').each(function () {
+            $(this).prop('disabled', false);
+            const baseName = String($(this).val());
+            $(this).text(baseName);
+        });
         $providers.trigger('change.select2');
         refreshWarningState();
+    };
+
+    if (!modelId || !modelId.includes('/')) {
+        resetOptions();
         return;
     }
 
@@ -393,20 +401,69 @@ export async function syncOpenRouterProvidersForModel(modelId, providersSelector
             return;
         }
 
-        const providerNames = await response.json();
+        const rawData = await response.json();
 
-        if (!Array.isArray(providerNames) || providerNames.length === 0) {
-            $providers.find('option').prop('disabled', false);
-            $providers.trigger('change.select2');
-            refreshWarningState();
+        if (!Array.isArray(rawData) || rawData.length === 0) {
+            resetOptions();
             return;
         }
 
+        /** @type {Map<string, { prompt: number, completion: number, quantization?: string }>} */
+        const providerMap = new Map();
+        for (const item of rawData) {
+            if (typeof item === 'string') {
+                providerMap.set(item, { prompt: Infinity, completion: Infinity });
+            } else if (item && typeof item === 'object' && item.name) {
+                providerMap.set(item.name, {
+                    prompt: Number.isFinite(item.prompt) ? Number(item.prompt) : Infinity,
+                    completion: Number.isFinite(item.completion) ? Number(item.completion) : Infinity,
+                    quantization: item.quantization,
+                });
+            }
+        }
+
+        const formatRate = (n) => (n > 0 && n < 0.01) ? n.toFixed(4) : n.toFixed(2);
+
+        // Update labels and disabled state
         $providers.find('option').each(function () {
-            const isAvailable = providerNames.includes($(this).val());
-            $(this).prop('disabled', !isAvailable);
+            const providerName = String($(this).val());
+            const info = providerMap.get(providerName);
+            if (info) {
+                $(this).prop('disabled', false);
+                let label = providerName;
+                if (Number.isFinite(info.prompt) && Number.isFinite(info.completion) && info.prompt !== Infinity) {
+                    const quant = (info.quantization && info.quantization !== 'unknown') ? ` • ${info.quantization}` : '';
+                    label = `${providerName} ($${formatRate(info.prompt)} / $${formatRate(info.completion)}${quant})`;
+                }
+                $(this).text(label);
+            } else {
+                $(this).prop('disabled', true);
+                $(this).text(providerName);
+            }
         });
 
+        // Re-order options: available providers sorted cheapest-first (prompt asc, completion asc), then disabled providers
+        const options = $providers.find('option').get();
+        options.sort((a, b) => {
+            const valA = String($(a).val());
+            const valB = String($(b).val());
+            const infoA = providerMap.get(valA);
+            const infoB = providerMap.get(valB);
+
+            if (infoA && !infoB) return -1;
+            if (!infoA && infoB) return 1;
+            if (!infoA && !infoB) return valA.localeCompare(valB);
+
+            const promptDiff = infoA.prompt - infoB.prompt;
+            if (promptDiff !== 0) return promptDiff;
+
+            const completionDiff = infoA.completion - infoB.completion;
+            if (completionDiff !== 0) return completionDiff;
+
+            return valA.localeCompare(valB);
+        });
+
+        $providers.empty().append(options);
         $providers.trigger('change.select2');
         refreshWarningState();
     } catch (error) {

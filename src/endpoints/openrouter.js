@@ -24,9 +24,15 @@ router.post('/models/providers', async (req, res) => {
         /** @type {any} */
         const data = await response.json();
         const endpoints = data?.data?.endpoints || [];
-        const providerNames = endpoints.map(e => e.provider_name);
+        const providers = endpoints.map(e => ({
+            name: e.provider_name,
+            prompt: Number(e.pricing?.prompt) * 1e6,
+            completion: Number(e.pricing?.completion) * 1e6,
+            context: e.context_length,
+            quantization: e.quantization,
+        }));
 
-        return res.json(providerNames);
+        return res.json(providers);
     } catch (error) {
         console.error(error);
         return res.sendStatus(500);
