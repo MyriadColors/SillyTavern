@@ -62,4 +62,4 @@ test-results/
 .deps.hash
 /package-lock.json
 /PRs/
-public/dist/lib.js
+public/dist/
