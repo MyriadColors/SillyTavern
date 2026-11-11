@@ -1091,6 +1091,28 @@ describe('convertGooglePrompt', () => {
         });
     }
 
+    test('merges multiple consecutive trailing assistant messages into user turn for noPrefillModel', () => {
+        const messages = [
+            { role: 'user', content: 'Question' },
+            { role: 'assistant', content: 'Part 1' },
+            { role: 'assistant', content: 'Part 2' },
+        ];
+        const result = mod.convertGooglePrompt(messages, 'gemini-3.8-flash', false, names);
+        expect(result.contents).toHaveLength(1);
+        expect(result.contents[0].role).toBe('user');
+        expect(result.contents[0].parts[0].text).toBe('Question\n\nPart 1\n\nPart 2');
+    });
+
+    test('converts lone assistant message to user turn for noPrefillModel', () => {
+        const messages = [
+            { role: 'assistant', content: 'Only assistant' },
+        ];
+        const result = mod.convertGooglePrompt(messages, 'gemini-3.8-flash', false, names);
+        expect(result.contents).toHaveLength(1);
+        expect(result.contents[0].role).toBe('user');
+        expect(result.contents[0].parts[0].text).toBe('Only assistant');
+    });
+
     test('keeps non-trailing model turns on models without prefill support', () => {
         const messages = [
             { role: 'user', content: 'Hi' },

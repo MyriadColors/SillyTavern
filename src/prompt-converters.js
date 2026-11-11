@@ -454,7 +454,16 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
     const toolNameMap = {};
 
     // https://ai.google.dev/gemini-api/docs/latest-model#prefilled-model-turn-validation
-    const noPrefillModel = /gemini-3\.[678]-flash|gemini-3\.5-flash-lite/.test(model);
+    const noPrefillModel = /gemini-3\.[6789]-flash|gemini-3\.5-flash-lite|gemini-4/.test(model);
+
+    // Find the index of the last user turn so all trailing assistant turns can be converted
+    let lastUserTurnIndex = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'user' || messages[i].role === 'system' || messages[i].role === 'tool') {
+            lastUserTurnIndex = i;
+            break;
+        }
+    }
 
     const contents = [];
     messages.forEach((message, index) => {
@@ -463,7 +472,7 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
             message.role = 'user';
         } else if (message.role === 'assistant') {
             // A trailing model turn is a prefill, which is rejected by the newest models
-            message.role = noPrefillModel && index === messages.length - 1 ? 'user' : 'model';
+            message.role = noPrefillModel && index > lastUserTurnIndex ? 'user' : 'model';
         }
 
         // Convert the content to an array of parts
@@ -618,6 +627,28 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
             });
         }
     });
+
+    // Guarantee that contents never ends with a model turn for models that reject trailing model turns
+    if (noPrefillModel && contents.length > 0 && contents[contents.length - 1].role === 'model') {
+        const lastTurn = contents.pop();
+        if (contents.length > 0 && contents[contents.length - 1].role === 'user') {
+            for (const part of lastTurn.parts) {
+                if (part.text) {
+                    const textPart = contents[contents.length - 1].parts.find(p => typeof p.text === 'string');
+                    if (textPart) {
+                        textPart.text += '\n\n' + part.text;
+                    } else {
+                        contents[contents.length - 1].parts.push(part);
+                    }
+                } else {
+                    contents[contents.length - 1].parts.push(part);
+                }
+            }
+        } else {
+            lastTurn.role = 'user';
+            contents.push(lastTurn);
+        }
+    }
 
     return { contents: contents, system_instruction: system_instruction };
 }
