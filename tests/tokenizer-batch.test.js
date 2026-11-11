@@ -101,8 +101,8 @@ describe('Tokenizer batch counting endpoint (/openai/count)', () => {
         const data2 = await res2.json();
 
         expect(data2.counts[0]).toBeGreaterThan(data1.counts[0]);
-        // For gpt-4o, tokensPerMessage is 3
-        expect(data2.counts[0] - data1.counts[0]).toBe(3);
+        // For gpt-4o, tokensPerMessage is 3, plus role ('user' is 1 token) = 4 extra tokens
+        expect(data2.counts[0] - data1.counts[0]).toBe(4);
     });
 
     test('handles mixed items in batch and handles graceful fallback for invalid items', async () => {
@@ -120,5 +120,25 @@ describe('Tokenizer batch counting endpoint (/openai/count)', () => {
         expect(data.counts[0]).toBeGreaterThan(0);
         expect(data.counts[1]).toBeGreaterThan(0);
         expect(data.counts[2]).toBe(0); // null counts as 0
+    });
+
+    test('counts Claude tokens successfully even if globalThis.location is polluted with empty href', async () => {
+        // Simulate @jsquash/* polyfill behavior in runtimes defining `self` (such as Bun)
+        // @ts-ignore
+        globalThis.location = { href: '' };
+
+        const body = [
+            { role: 'user', content: 'Hello Claude, please count these tokens accurately.' },
+        ];
+        const res = await fetch(`${baseUrl}/openai/count?model=claude`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(typeof data.token_count).toBe('number');
+        expect(data.token_count).toBeGreaterThan(0);
     });
 });

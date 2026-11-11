@@ -50,6 +50,12 @@ const Jimp = createJimp({
     plugins: [...defaultPlugins],
 });
 
+// @jsquash/* codecs set `self.location = { href: '' }` when `self` is defined (e.g., in Bun),
+// which breaks UMD modules (such as @agnai/web-tokenizers) that check `typeof location === 'undefined'`.
+if ('location' in globalThis && typeof globalThis.location === 'object' && globalThis.location !== null && 'href' in globalThis.location && globalThis.location.href === '') {
+    Reflect.deleteProperty(globalThis, 'location');
+}
+
 const JimpMime = {
     bmp: bmp().mime,
     gif: gif().mime,

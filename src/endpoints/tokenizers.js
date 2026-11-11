@@ -211,6 +211,10 @@ class WebTokenizer {
      */
     #instance = null;
     /**
+     * @type {Promise<Tokenizer|null>|null} Pending initialization promise
+     */
+    #loadPromise = null;
+    /**
      * @type {string} Path to the tokenizer model
      */
     #model;
@@ -238,16 +242,29 @@ class WebTokenizer {
             return this.#instance;
         }
 
-        try {
-            const pathToModel = await getPathToTokenizer(this.#model, this.#fallbackModel);
-            const fileBuffer = await fs.promises.readFile(pathToModel);
-            this.#instance = await Tokenizer.fromJSON(/** @type {ArrayBuffer} */ (fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength)));
-            console.info('Instantiated the tokenizer for', path.parse(pathToModel).name);
-            return this.#instance;
-        } catch (error) {
-            console.error('Web tokenizer failed to load: ' + this.#model, error);
-            return null;
+        if (this.#loadPromise) {
+            return this.#loadPromise;
         }
+
+        this.#loadPromise = (async () => {
+            try {
+                if ('location' in globalThis && typeof globalThis.location === 'object' && globalThis.location !== null && 'href' in globalThis.location && globalThis.location.href === '') {
+                    Reflect.deleteProperty(globalThis, 'location');
+                }
+                const pathToModel = await getPathToTokenizer(this.#model, this.#fallbackModel);
+                const fileBuffer = await fs.promises.readFile(pathToModel);
+                this.#instance = await Tokenizer.fromJSON(/** @type {ArrayBuffer} */ (fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength)));
+                console.info('Instantiated the tokenizer for', path.parse(pathToModel).name);
+                return this.#instance;
+            } catch (error) {
+                console.error('Web tokenizer failed to load: ' + this.#model, error);
+                return null;
+            } finally {
+                this.#loadPromise = null;
+            }
+        })();
+
+        return this.#loadPromise;
     }
 }
 
