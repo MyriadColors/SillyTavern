@@ -20,11 +20,13 @@ jest.unstable_mockModule(writeFileAtomicPath, () => ({
 
 let tryWriteFile;
 let tryWriteFileSync;
+let tryWriteFileWithFallback;
 
 beforeAll(async () => {
     const util = await import(utilPath);
     tryWriteFile = util.tryWriteFile;
     tryWriteFileSync = util.tryWriteFileSync;
+    tryWriteFileWithFallback = util.tryWriteFileWithFallback;
 });
 
 /**
@@ -115,5 +117,62 @@ describe('tryWriteFileSync', () => {
         expect(() => tryWriteFileSync(filePath, 'data')).toThrow(err);
 
         expect(mockWriteFileAtomicSync).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('tryWriteFileWithFallback', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-atomic-fallback-'));
+        mockWriteFileAtomic.mockReset();
+        mockWriteFileAtomicSync.mockReset();
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('writes synchronously and leaves the async writer untouched', async () => {
+        mockWriteFileAtomicSync.mockImplementationOnce(() => { });
+        const filePath = path.join(tmpDir, 'chat.jsonl');
+
+        await expect(tryWriteFileWithFallback(filePath, 'data')).resolves.toBeUndefined();
+
+        expect(mockWriteFileAtomicSync).toHaveBeenCalledTimes(1);
+        expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    });
+
+    test('falls back to the async writer on a transient sync failure', async () => {
+        mockWriteFileAtomicSync.mockImplementation(() => { throw errorWithCode('EPERM'); });
+        mockWriteFileAtomic.mockResolvedValueOnce(undefined);
+        const filePath = path.join(tmpDir, 'chat.jsonl');
+
+        await expect(tryWriteFileWithFallback(filePath, 'data')).resolves.toBeUndefined();
+
+        expect(mockWriteFileAtomicSync).toHaveBeenCalledTimes(3);
+        expect(mockWriteFileAtomic).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects a non-transient sync failure without touching the async writer', async () => {
+        const err = errorWithCode('EINVAL');
+        mockWriteFileAtomicSync.mockImplementation(() => { throw err; });
+        const filePath = path.join(tmpDir, 'chat.jsonl');
+
+        await expect(tryWriteFileWithFallback(filePath, 'data')).rejects.toBe(err);
+
+        expect(mockWriteFileAtomicSync).toHaveBeenCalledTimes(1);
+        expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    });
+
+    test('rejects when both the sync and the async writer fail', async () => {
+        const asyncErr = errorWithCode('EINVAL');
+        mockWriteFileAtomicSync.mockImplementation(() => { throw errorWithCode('EBUSY'); });
+        mockWriteFileAtomic.mockRejectedValueOnce(asyncErr);
+        const filePath = path.join(tmpDir, 'chat.jsonl');
+
+        await expect(tryWriteFileWithFallback(filePath, 'data')).rejects.toBe(asyncErr);
+
+        expect(mockWriteFileAtomic).toHaveBeenCalledTimes(1);
     });
 });

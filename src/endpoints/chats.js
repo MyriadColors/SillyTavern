@@ -16,7 +16,7 @@ import {
     generateTimestamp,
     removeOldBackups,
     formatBytes,
-    tryWriteFile,
+    tryWriteFileWithFallback,
     tryWriteFileSync,
     tryReadFileSync,
     tryDeleteFile,
@@ -54,9 +54,10 @@ export function getBackupKey(name) {
  * @param {string} name The name of the chat.
  * @param {string} data The serialized chat to save.
  * @param {string} backupPrefix The file prefix. Typically CHAT_BACKUPS_PREFIX.
+ * @param {boolean} strict Rethrow write failures instead of logging them. Pruning stays best-effort.
  * @returns
  */
-function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
+function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX, strict = false) {
     try {
         if (!isBackupEnabled) { return; }
         if (!fs.existsSync(directory)) {
@@ -66,13 +67,24 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
 
         const backupFile = path.join(directory, `${backupPrefix}${name}_${generateTimestamp()}.jsonl`);
 
-        tryWriteFileSync(backupFile, data);
+        try {
+            tryWriteFileSync(backupFile, data);
+        } catch (writeError) {
+            if (strict) {
+                throw writeError;
+            }
+            console.error(`Could not backup chat for ${name}`, writeError);
+            return;
+        }
         removeOldBackups(directory, `${backupPrefix}${name}_`);
         if (isNaN(maxTotalChatBackups) || maxTotalChatBackups < 0) {
             return;
         }
         removeOldBackups(directory, backupPrefix, maxTotalChatBackups);
     } catch (err) {
+        if (strict) {
+            throw err;
+        }
         console.error(`Could not backup chat for ${name}`, err);
     }
 }
@@ -626,7 +638,21 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
     if (chatIntegritySlug && !await checkChatIntegrity(filePath, chatIntegritySlug)) {
         throw new IntegrityMismatchError(`Chat integrity check failed for "${filePath}". The expected integrity slug was "${chatIntegritySlug}".`);
     }
-    await tryWriteFile(filePath, jsonlData);
+    // A confirmed overwrite (skipIntegrityCheck === true) replaces the existing chat file,
+    // which would permanently destroy the previous content. Before the file is overwritten,
+    // snapshot its current bytes so the user can always restore the pre-overwrite state.
+    // This must run synchronously (bypassing the throttled backup function) to guarantee the
+    // snapshot is on disk before the overwrite below. The dedicated prefix keeps these
+    // snapshots separate from regular backups while still being listable and restorable
+    // through the backup browser (they start with the CHAT_BACKUPS_PREFIX guard).
+    if (skipIntegrityCheck && isBackupEnabled && fs.existsSync(filePath)) {
+        const previousContent = fs.readFileSync(filePath, 'utf8');
+        if (previousContent) {
+            backupChat(backupDirectory, cardName, previousContent, 'chat_pre_overwrite_', true);
+        }
+    }
+
+    await tryWriteFileWithFallback(filePath, jsonlData);
     getBackupFunction(handle, cardName)(backupDirectory, cardName, jsonlData);
 }
 

@@ -12,22 +12,13 @@ import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '
 import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
 import { callGenericPopup, Popup, POPUP_TYPE } from '../../popup.js';
 import { debounce_timeout, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '../../constants.js';
+import { resolveModelMigration } from './model-migrations.js';
 export { MODULE_NAME };
 
 const MODULE_NAME = 'caption';
 
 const PROMPT_DEFAULT = 'What\'s in this image?';
 const TEMPLATE_DEFAULT = '[{{user}} sends {{char}} a picture that contains: {{caption}}]';
-const GOOGLE_MODEL_MIGRATIONS = new Map([
-    ['gemini-3.1-flash-lite-preview', 'gemini-3.1-flash-lite'],
-    ['gemini-3.1-flash-image-preview', 'gemini-3.1-flash-image'],
-    ['gemini-3-pro-image-preview', 'gemini-3-pro-image'],
-    ['gemini-2.0-flash', 'gemini-3.8-flash'],
-    ['gemini-2.0-flash-lite', 'gemini-3.8-flash'],
-    ['gemini-2.5-flash-image-preview', 'gemini-2.5-flash-image'],
-    ['gemini-3.7-flash', 'gemini-3.8-flash'],
-    ['gemini-3.5-flash', 'gemini-3.6-flash'],
-]);
 
 /**
  * Migrates old extension settings to the new format.
@@ -50,10 +41,8 @@ function migrateSettings() {
         extension_settings.caption.multimodal_model = 'gpt-5.6-luna';
     }
 
-    if (['google', 'vertexai'].includes(extension_settings.caption.multimodal_api)) {
-        extension_settings.caption.multimodal_model = GOOGLE_MODEL_MIGRATIONS.get(extension_settings.caption.multimodal_model)
-            ?? extension_settings.caption.multimodal_model;
-    }
+    extension_settings.caption.multimodal_model = resolveModelMigration(
+        extension_settings.caption.multimodal_api, extension_settings.caption.multimodal_model);
 
     if (!extension_settings.caption.multimodal_api) {
         extension_settings.caption.multimodal_api = 'openai';
