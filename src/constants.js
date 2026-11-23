@@ -333,7 +333,6 @@ export const OLLAMA_KEYS = [
     'top_k',
     'top_p',
     'tfs_z',
-    'typical_p',
     'seed',
     'repeat_last_n',
     'min_p',

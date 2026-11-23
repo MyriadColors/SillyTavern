@@ -83,6 +83,18 @@ REM This fork deletes package-lock.json and ignores it because bun.lock is autho
 REM Upstream still tracks that file, so every upstream merge can raise a modify/delete
 REM conflict on it. Resolve that one automatically by deleting the file again.
 :handle_conflict
+SET IGNORE_OK=0
+findstr /x /c:"/package-lock.json" .gitignore > nul && SET IGNORE_OK=1
+
+if "!IGNORE_OK!"=="1" (
+    git diff --name-only --diff-filter=U | findstr /x /c:"package-lock.json" > nul
+    if not errorlevel 1 (
+        echo WARNING: Resolved package-lock.json by deleting it again (bun.lock is authoritative).
+        git rm --force --quiet -- package-lock.json
+        if errorlevel 1 goto merge_failed
+    )
+)
+
 SET UNMERGED_COUNT=0
 SET UNMERGED=
 FOR /F "tokens=*" %%i IN ('git diff --name-only --diff-filter=U') DO (
@@ -90,19 +102,15 @@ FOR /F "tokens=*" %%i IN ('git diff --name-only --diff-filter=U') DO (
     SET UNMERGED=%%i
 )
 
-SET IGNORE_OK=0
-findstr /x /c:"/package-lock.json" .gitignore > nul && SET IGNORE_OK=1
-
-if "!UNMERGED_COUNT!"=="1" if "!UNMERGED!"=="package-lock.json" if "!IGNORE_OK!"=="1" goto resolve_lock
+if "!UNMERGED_COUNT!"=="0" (
+    git commit --no-edit
+    if errorlevel 1 goto merge_failed
+    goto check_readded_lock
+)
 if !UNMERGED_COUNT! gtr 0 echo Unmerged files: !UNMERGED!
 goto merge_failed
 
-:resolve_lock
-echo WARNING: Resolved package-lock.json by deleting it again (bun.lock is authoritative).
-git rm --force --quiet -- package-lock.json
-if errorlevel 1 goto merge_failed
-git commit --no-edit
-if errorlevel 1 goto merge_failed
+:check_readded_lock
 
 REM Upstream may also re-add package-lock.json without conflicting, which would undo the
 REM fork's deletion. Keep the deletion authoritative either way.

@@ -3355,14 +3355,15 @@ export async function getExtensionPrompt(position = extension_prompt_types.IN_PR
         }
         return true;
     };
-    const promptPromises = Object.keys(extension_prompts)
+    const candidates = Object.keys(extension_prompts)
         .sort()
         .map((x) => extension_prompts[x])
         .filter(x => x.position == position && x.value)
         .filter(x => depth === undefined || x.depth === undefined || x.depth === depth)
-        .filter(x => role === undefined || x.role === undefined || x.role === role)
-        .filter(filterByFunction);
-    const prompts = await Promise.all(promptPromises);
+        .filter(x => role === undefined || x.role === undefined || x.role === role);
+    // The filter function may be async, so it cannot be passed to Array.filter directly
+    const passes = await Promise.all(candidates.map(filterByFunction));
+    const prompts = candidates.filter((_, index) => passes[index]);
 
     let values = prompts.map(x => x.value.trim()).join(separator);
     if (wrap && values.length && !values.startsWith(separator)) {
@@ -9595,6 +9596,13 @@ export async function saveMetadata() {
     return await saveChatConditional();
 }
 
+/**
+ * Hard ceiling on how long saveChatConditional() will hold the save lock, in ms.
+ * Guards against an await inside saveChat() that never settles.
+ * @type {number}
+ */
+const SAVE_CHAT_HARD_TIMEOUT = 60000;
+
 export async function saveChatConditional() {
     try {
         await waitUntilCondition(() => !isChatSaving, DEFAULT_SAVE_EDIT_TIMEOUT, 100);
@@ -9608,10 +9616,21 @@ export async function saveChatConditional() {
 
         isChatSaving = true;
 
-        if (selected_group) {
-            await saveGroupChat(selected_group, true);
-        } else {
-            await saveChat();
+        // saveChat() can await a promise that never settles - notably the chat
+        // integrity Popup.show.input(), which waits on user input with no timeout.
+        // If that never resolves, the finally block below never runs, isChatSaving
+        // stays true for the life of the page, and every subsequent call bails out
+        // at the guard above and silently returns without saving. Race it so the
+        // lock is always released.
+        const savePromise = selected_group ? saveGroupChat(selected_group, true) : saveChat();
+        let saveTimer;
+        const saveTimeout = new Promise((_, reject) => {
+            saveTimer = setTimeout(() => reject(new Error('saveChat did not settle within the timeout; releasing the save lock')), SAVE_CHAT_HARD_TIMEOUT);
+        });
+        try {
+            await Promise.race([savePromise, saveTimeout]);
+        } finally {
+            clearTimeout(saveTimer);
         }
 
         // Save token and prompts cache to IndexedDB storage

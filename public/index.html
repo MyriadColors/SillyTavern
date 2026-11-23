@@ -1288,7 +1288,7 @@
                                         <input class="neo-range-slider" type="range" id="top_p_textgenerationwebui" name="volume" min="0" max="1" step="0.01">
                                         <input class="neo-range-input" type="number" min="0" max="1" step="0.01" data-for="top_p_textgenerationwebui" id="top_p_counter_textgenerationwebui">
                                     </div>
-                                    <div data-tg-type-mode="except" data-tg-type="generic" data-tg-samplers="typical_p" class="alignitemscenter flex-container flexFlowColumn flexBasis30p flexGrow flexShrink gap0">
+                                    <div data-tg-type-mode="except" data-tg-type="generic,ollama" data-tg-samplers="typical_p" class="alignitemscenter flex-container flexFlowColumn flexBasis30p flexGrow flexShrink gap0">
                                         <small>
                                             <span data-i18n="Typical P">Typical P</span>
                                             <div class="fa-solid fa-circle-info opacity50p" title="Typical P Sampling prioritizes tokens based on their deviation from the average entropy of the set.&#13;It maintains tokens whose cumulative probability is close to a predefined threshold (e.g., 0.5), emphasizing those with average information content.&#13;Set to 1.0 to disable." data-i18n="[title]Typical_P_desc"></div>
@@ -4027,6 +4027,8 @@
                             </select>
                             <h4 data-i18n="Z.AI Model">Z.AI Model</h4>
                             <select id="model_zai_select">
+                                <option value="glm-5.3">glm-5.3</option>
+                                <option value="glm-5.3-flash">glm-5.3-flash</option>
                                 <option value="glm-5.2">glm-5.2</option>
                                 <option value="glm-5-turbo">glm-5-turbo</option>
                                 <option value="glm-5v-turbo">glm-5v-turbo</option>
@@ -5405,6 +5407,9 @@
                             <div id="CustomCSS-block" class="flex-container flexFlowColumn">
                                 <h4 class="title_restorable" title="Apply a custom CSS style to all of the ST GUI." data-i18n="[title]Apply a custom CSS style to all of the ST GUI">
                                     <span data-i18n="Custom CSS">Custom CSS</span>
+                                    <label class="checkbox_label margin0" for="customCSSEnabled" title="Apply the Custom CSS. Uncheck to turn it off without deleting it." data-i18n="[title]Apply the Custom CSS. Uncheck to turn it off without deleting it.">
+                                        <input id="customCSSEnabled" type="checkbox" checked />
+                                    </label>
                                     <i class="editor_maximize fa-solid fa-maximize right_menu_button" data-for="customCSS" title="Expand the editor" data-i18n="[title]Expand the editor"></i>
                                 </h4>
                                 <div id="CustomCSS-textAreaBlock" class="flex-container flexnowrap alignitemscenter">
