@@ -1361,3 +1361,28 @@ describe('cachingAtDepthForOpenRouterClaude', () => {
         expect(typeof messages[1].content).toBe('string');
     });
 });
+
+
+describe('calculateGoogleBudgetTokens (Gemini 4)', () => {
+    test('maps neon and hydrogen max effort to xhigh and min effort to low', () => {
+        for (const model of ['gemini-4-neon', 'gemini-4-hydrogen']) {
+            expect(mod.calculateGoogleBudgetTokens(32768, 'auto', model)).toBeNull();
+            expect(mod.calculateGoogleBudgetTokens(32768, 'min', model)).toBe('low');
+            expect(mod.calculateGoogleBudgetTokens(32768, 'low', model)).toBe('low');
+            expect(mod.calculateGoogleBudgetTokens(32768, 'medium', model)).toBe('medium');
+            expect(mod.calculateGoogleBudgetTokens(32768, 'high', model)).toBe('high');
+            expect(mod.calculateGoogleBudgetTokens(32768, 'max', model)).toBe('xhigh');
+        }
+    });
+
+    test('maps carbon and argon max effort to high and min effort to low', () => {
+        for (const model of ['gemini-4-carbon', 'gemini-4-argon']) {
+            expect(mod.calculateGoogleBudgetTokens(32768, 'auto', model)).toBeNull();
+            expect(mod.calculateGoogleBudgetTokens(32768, 'min', model)).toBe('low');
+            expect(mod.calculateGoogleBudgetTokens(32768, 'low', model)).toBe('low');
+            expect(mod.calculateGoogleBudgetTokens(32768, 'medium', model)).toBe('medium');
+            expect(mod.calculateGoogleBudgetTokens(32768, 'high', model)).toBe('high');
+            expect(mod.calculateGoogleBudgetTokens(32768, 'max', model)).toBe('high');
+        }
+    });
+});

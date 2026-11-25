@@ -528,9 +528,9 @@ async function sendMakerSuiteRequest(request, response) {
         const isThinkingConfigModel = m => (/^gemini-2.5-(flash|pro)/.test(m) && !/-image(-preview)?$/.test(m)) || (/^gemini-3[.\d]*-(flash|pro)/.test(m)) || (/^gemini-4/.test(m));
         const isImageSizeModel = m => /^gemini-3/.test(m);
         // https://ai.google.dev/gemini-api/docs/latest-model#api-changes-and-parameter-updates
-        // Gemini 4 Argon ignores temperature/top_p/top_k/candidate_count.
+        // Gemini 4 models ignore temperature/top_p/top_k/candidate_count.
         const noSamplingModel = /gemini-3\.[678]-flash|gemini-3\.5-flash-lite|gemini-4/.test(model);
-        // Gemini 4 Argon does not support explicit thinking budgets, only thinking levels.
+        // Gemini 4 models do not support explicit thinking budgets, only thinking levels.
         const isThinkingLevelOnlyModel = /^gemini-4/.test(model);
 
         const noSearchModels = [

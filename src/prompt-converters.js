@@ -1338,8 +1338,28 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
         return null;
     }
 
-    if (/gemini-4/.test(model)) {
-        return getGemini3FlashBudget();
+    function getGemini4Budget() {
+        const supportsXhigh = model.includes('gemini-4-neon') || model.includes('gemini-4-hydrogen');
+        switch (reasoningEffort) {
+            case REASONING_EFFORT.auto:
+                return null;
+            case REASONING_EFFORT.min:
+                return 'low';
+            case REASONING_EFFORT.low:
+                return 'low';
+            case REASONING_EFFORT.medium:
+                return 'medium';
+            case REASONING_EFFORT.high:
+                return 'high';
+            case REASONING_EFFORT.max:
+                return supportsXhigh ? 'xhigh' : 'high';
+        }
+
+        return null;
+    }
+
+    if (model.startsWith('gemini-4')) {
+        return getGemini4Budget();
     }
 
     if (/gemini-3[.\d]*-pro/.test(model)) {
